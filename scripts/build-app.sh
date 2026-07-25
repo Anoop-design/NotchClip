@@ -90,6 +90,10 @@ fi
 
 if [[ -z "${SCRATCH}" ]]; then
   SCRATCH="$(mktemp -d "${TMPDIR:-/tmp}/notchclip-build.XXXXXX")"
+  # TMPDIR normally ends in '/', so mktemp yields a doubled separator. The
+  # linker records normalized paths, so leaving it unnormalized breaks any
+  # prefix comparison against recorded rpaths.
+  SCRATCH="$(cd "${SCRATCH}" && pwd)"
   OWNED_SCRATCH=1
 else
   if [[ "${SCRATCH}" != /* ]]; then
@@ -214,6 +218,23 @@ mkdir -p "${STAGE_APP}/Contents/MacOS"
 cp "${PLIST_SRC}" "${STAGE_APP}/Contents/Info.plist"
 cp "${BIN}" "${STAGE_APP}/Contents/MacOS/NotchClip"
 chmod a+x "${STAGE_APP}/Contents/MacOS/NotchClip"
+
+# A debug link adds an LC_RPATH into the SwiftPM scratch PackageFrameworks
+# directory, which this script deletes on exit. Nothing resolves through it
+# (library targets link statically here), but it leaves a dangling absolute
+# build path inside a shipped binary and fails verify-app.sh. Release builds
+# do not emit it. Strip any rpath pointing into scratch before signing, since
+# signing must cover the final bytes.
+while IFS= read -r RPATH; do
+  [[ -n "${RPATH}" ]] || continue
+  case "${RPATH}" in
+    "${SCRATCH}"/*|"${BUILD_DIR}"/*)
+      echo "  stripping scratch rpath: ${RPATH}"
+      install_name_tool -delete_rpath "${RPATH}" "${STAGE_APP}/Contents/MacOS/NotchClip"
+      ;;
+  esac
+done < <(otool -l "${STAGE_APP}/Contents/MacOS/NotchClip" \
+  | awk '/LC_RPATH/{f=1} f&&/^ *path /{print $2; f=0}')
 
 if [[ -d "${RESOURCES_SRC}" ]] && [[ -n "$(find "${RESOURCES_SRC}" -mindepth 1 -print -quit 2>/dev/null)" ]]; then
   mkdir -p "${STAGE_APP}/Contents/Resources"
