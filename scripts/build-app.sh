@@ -1,0 +1,317 @@
+#!/usr/bin/env bash
+# Assemble a signed native-architecture NotchClip.app from SwiftPM.
+# Defaults to a local ad-hoc signature; pass --sign for Developer ID release signing.
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
+
+OUTPUT_APP="${REPO_ROOT}/dist/NotchClip.app"
+SCRATCH=""
+OWNED_SCRATCH=0
+STAGE_DIR=""
+INSTALL_TMP=""
+SIGNING_IDENTITY="-"
+
+usage() {
+  cat <<'EOF'
+Usage: scripts/build-app.sh [--output PATH] [--scratch PATH] [--sign IDENTITY]
+
+  --output PATH   Destination .app bundle path (default: <repo>/dist/NotchClip.app)
+  --scratch PATH  Optional build directory (default: mktemp -d). Staging always
+                  uses a unique mktemp directory inside this path.
+  --sign IDENTITY Code-sign with this identity, hardened runtime, and timestamp.
+                  Default '-' creates a local ad-hoc signature.
+
+Builds a signed native-architecture app bundle (not universal).
+Does not notarize, open, or launch the app.
+EOF
+}
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --output)
+      [[ $# -ge 2 ]] || { echo "error: --output requires a path" >&2; exit 2; }
+      OUTPUT_APP="$2"
+      shift 2
+      ;;
+    --scratch)
+      [[ $# -ge 2 ]] || { echo "error: --scratch requires a path" >&2; exit 2; }
+      SCRATCH="$2"
+      shift 2
+      ;;
+    --sign)
+      [[ $# -ge 2 ]] || { echo "error: --sign requires an identity" >&2; exit 2; }
+      SIGNING_IDENTITY="$2"
+      shift 2
+      ;;
+    -h|--help)
+      usage
+      exit 0
+      ;;
+    *)
+      echo "error: unknown argument: $1" >&2
+      usage >&2
+      exit 2
+      ;;
+  esac
+done
+
+if [[ "${OUTPUT_APP}" != /* ]]; then
+  OUTPUT_APP="$(pwd)/${OUTPUT_APP}"
+fi
+OUTPUT_PARENT="$(dirname "${OUTPUT_APP}")"
+OUTPUT_BASE="$(basename "${OUTPUT_APP}")"
+if [[ -d "${OUTPUT_PARENT}" ]]; then
+  OUTPUT_APP="$(cd "${OUTPUT_PARENT}" && pwd)/${OUTPUT_BASE}"
+fi
+
+if [[ -e "${OUTPUT_APP}" ]]; then
+  echo "error: output already exists: ${OUTPUT_APP}" >&2
+  echo "Choose another --output path; refusing to overwrite." >&2
+  exit 1
+fi
+
+if [[ -z "${SCRATCH}" ]]; then
+  SCRATCH="$(mktemp -d "${TMPDIR:-/tmp}/notchclip-build.XXXXXX")"
+  OWNED_SCRATCH=1
+else
+  if [[ "${SCRATCH}" != /* ]]; then
+    SCRATCH="$(pwd)/${SCRATCH}"
+  fi
+  mkdir -p "${SCRATCH}"
+  SCRATCH="$(cd "${SCRATCH}" && pwd)"
+  OWNED_SCRATCH=0
+fi
+
+# True only for directories this invocation created via mktemp with a known prefix.
+is_owned_mktemp_dir() {
+  local path="$1"
+  local prefix="$2"
+  [[ -n "${path}" && -d "${path}" ]] || return 1
+  local base
+  base="$(basename "${path}")"
+  case "${base}" in
+    ${prefix}*) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+cleanup() {
+  # Stage dir: always created with mktemp by this script; safe to remove when prefix matches.
+  if is_owned_mktemp_dir "${STAGE_DIR:-}" "notchclip-stage."; then
+    rm -rf "${STAGE_DIR}"
+  fi
+  STAGE_DIR=""
+
+  # Install sibling: only remove if it still exists and matches our prefix.
+  if is_owned_mktemp_dir "${INSTALL_TMP:-}" ".notchclip-install."; then
+    rm -rf "${INSTALL_TMP}"
+  fi
+  INSTALL_TMP=""
+
+  # Full scratch: only when we created it with mktemp for this invocation.
+  if [[ "${OWNED_SCRATCH}" -eq 1 ]] && is_owned_mktemp_dir "${SCRATCH:-}" "notchclip-build."; then
+    rm -rf "${SCRATCH}"
+  fi
+}
+trap cleanup EXIT
+
+if [[ -z "${DEVELOPER_DIR:-}" ]]; then
+  if ACTIVE_DEV="$(xcode-select -p 2>/dev/null)" && [[ -n "${ACTIVE_DEV}" && -d "${ACTIVE_DEV}" ]]; then
+    export DEVELOPER_DIR="${ACTIVE_DEV}"
+  fi
+fi
+
+if command -v xcrun >/dev/null 2>&1; then
+  SWIFT=(xcrun --sdk macosx swift)
+else
+  SWIFT=(swift)
+fi
+
+PLIST_SRC="${REPO_ROOT}/Packaging/Info.plist"
+if [[ ! -f "${PLIST_SRC}" ]]; then
+  echo "error: missing bundle plist: ${PLIST_SRC}" >&2
+  exit 1
+fi
+
+BUILD_DIR="${SCRATCH}/spm"
+RESOURCES_SRC="${REPO_ROOT}/Packaging/Resources"
+ICON_MASTER="${REPO_ROOT}/Packaging/Assets/AppIconMaster.png"
+
+# Unique staging directory inside scratch — never rm -rf a fixed name under caller scratch.
+STAGE_DIR="$(mktemp -d "${SCRATCH}/notchclip-stage.XXXXXX")"
+STAGE_APP="${STAGE_DIR}/NotchClip.app"
+
+echo "Building NotchClip (release, native architecture)…"
+echo "  repo:    ${REPO_ROOT}"
+echo "  scratch: ${SCRATCH}"
+echo "  stage:   ${STAGE_DIR}"
+echo "  output:  ${OUTPUT_APP}"
+echo "  signing: ${SIGNING_IDENTITY}"
+if [[ -n "${DEVELOPER_DIR:-}" ]]; then
+  echo "  DEVELOPER_DIR=${DEVELOPER_DIR}"
+fi
+
+"${SWIFT[@]}" build \
+  --package-path "${REPO_ROOT}" \
+  --configuration release \
+  --product NotchClip \
+  --scratch-path "${BUILD_DIR}"
+
+BIN=""
+if SHOW_BIN="$("${SWIFT[@]}" build \
+  --package-path "${REPO_ROOT}" \
+  --configuration release \
+  --product NotchClip \
+  --scratch-path "${BUILD_DIR}" \
+  --show-bin-path 2>/dev/null)"; then
+  if [[ -x "${SHOW_BIN}/NotchClip" ]]; then
+    BIN="${SHOW_BIN}/NotchClip"
+  fi
+fi
+if [[ -z "${BIN}" ]]; then
+  while IFS= read -r -d '' candidate; do
+    if [[ -x "${candidate}" && ! -d "${candidate}" ]]; then
+      BIN="${candidate}"
+      break
+    fi
+  done < <(find "${BUILD_DIR}" -type f -name NotchClip -print0 2>/dev/null | sort -z)
+fi
+if [[ -z "${BIN}" || ! -x "${BIN}" ]]; then
+  echo "error: release executable NotchClip not found under ${BUILD_DIR}" >&2
+  exit 1
+fi
+
+echo "  binary:  ${BIN}"
+
+mkdir -p "${STAGE_APP}/Contents/MacOS"
+
+cp "${PLIST_SRC}" "${STAGE_APP}/Contents/Info.plist"
+cp "${BIN}" "${STAGE_APP}/Contents/MacOS/NotchClip"
+chmod a+x "${STAGE_APP}/Contents/MacOS/NotchClip"
+
+if [[ -d "${RESOURCES_SRC}" ]] && [[ -n "$(find "${RESOURCES_SRC}" -mindepth 1 -print -quit 2>/dev/null)" ]]; then
+  mkdir -p "${STAGE_APP}/Contents/Resources"
+  cp -R "${RESOURCES_SRC}/." "${STAGE_APP}/Contents/Resources/"
+fi
+
+if [[ ! -f "${ICON_MASTER}" ]]; then
+  echo "error: missing app icon master: ${ICON_MASTER}" >&2
+  exit 1
+fi
+if ! command -v sips >/dev/null 2>&1 || ! command -v iconutil >/dev/null 2>&1; then
+  echo "error: sips and iconutil are required to build AppIcon.icns" >&2
+  exit 1
+fi
+ICONSET="${STAGE_DIR}/AppIcon.iconset"
+mkdir -p "${ICONSET}" "${STAGE_APP}/Contents/Resources"
+sips -z 16 16 "${ICON_MASTER}" --out "${ICONSET}/icon_16x16.png" >/dev/null
+sips -z 32 32 "${ICON_MASTER}" --out "${ICONSET}/icon_16x16@2x.png" >/dev/null
+sips -z 32 32 "${ICON_MASTER}" --out "${ICONSET}/icon_32x32.png" >/dev/null
+sips -z 64 64 "${ICON_MASTER}" --out "${ICONSET}/icon_32x32@2x.png" >/dev/null
+sips -z 128 128 "${ICON_MASTER}" --out "${ICONSET}/icon_128x128.png" >/dev/null
+sips -z 256 256 "${ICON_MASTER}" --out "${ICONSET}/icon_128x128@2x.png" >/dev/null
+sips -z 256 256 "${ICON_MASTER}" --out "${ICONSET}/icon_256x256.png" >/dev/null
+sips -z 512 512 "${ICON_MASTER}" --out "${ICONSET}/icon_256x256@2x.png" >/dev/null
+sips -z 512 512 "${ICON_MASTER}" --out "${ICONSET}/icon_512x512.png" >/dev/null
+cp "${ICON_MASTER}" "${ICONSET}/icon_512x512@2x.png"
+iconutil -c icns "${ICONSET}" -o "${STAGE_APP}/Contents/Resources/AppIcon.icns"
+
+if [[ ! -f "${STAGE_APP}/Contents/Info.plist" ]]; then
+  echo "error: staged Info.plist missing" >&2
+  exit 1
+fi
+if [[ ! -x "${STAGE_APP}/Contents/MacOS/NotchClip" ]]; then
+  echo "error: staged executable missing or not executable" >&2
+  exit 1
+fi
+if ! plutil -lint "${STAGE_APP}/Contents/Info.plist" >/dev/null; then
+  echo "error: staged Info.plist failed plutil -lint" >&2
+  exit 1
+fi
+
+# Finder/File Provider can attach empty FinderInfo or resource-fork attributes
+# to bundles in Documents. Code signing rejects those attributes even though
+# they are not app content, so remove only those two known detritus classes.
+if command -v xattr >/dev/null 2>&1; then
+  xattr -dr com.apple.FinderInfo "${STAGE_APP}" 2>/dev/null || true
+  xattr -dr com.apple.ResourceFork "${STAGE_APP}" 2>/dev/null || true
+fi
+
+# Sign the completed bundle so Info.plist and all staged contents are covered.
+if ! command -v codesign >/dev/null 2>&1; then
+  echo "error: codesign is required to create a runnable macOS app" >&2
+  exit 1
+fi
+if [[ "${SIGNING_IDENTITY}" == "-" ]]; then
+  codesign --force --sign - "${STAGE_APP}"
+else
+  codesign \
+    --force \
+    --sign "${SIGNING_IDENTITY}" \
+    --options runtime \
+    --timestamp \
+    "${STAGE_APP}"
+fi
+if ! codesign --verify --deep --strict --verbose=2 "${STAGE_APP}"; then
+  echo "error: staged app failed strict code-signature verification" >&2
+  exit 1
+fi
+
+if [[ -e "${OUTPUT_APP}" ]]; then
+  echo "error: output already exists: ${OUTPUT_APP}" >&2
+  echo "Choose another --output path; refusing to overwrite." >&2
+  exit 1
+fi
+
+mkdir -p "$(dirname "${OUTPUT_APP}")"
+
+INSTALL_PARENT="$(dirname "${OUTPUT_APP}")"
+INSTALL_TMP="$(mktemp -d "${INSTALL_PARENT}/.notchclip-install.XXXXXX")"
+
+cp -R "${STAGE_APP}" "${INSTALL_TMP}/NotchClip.app"
+
+if [[ -e "${OUTPUT_APP}" ]]; then
+  echo "error: output already exists: ${OUTPUT_APP}" >&2
+  echo "Choose another --output path; refusing to overwrite." >&2
+  exit 1
+fi
+
+# Rename into place (atomic on the same volume).
+mv "${INSTALL_TMP}/NotchClip.app" "${OUTPUT_APP}"
+rmdir "${INSTALL_TMP}" 2>/dev/null || true
+if [[ -d "${INSTALL_TMP}" ]] && is_owned_mktemp_dir "${INSTALL_TMP}" ".notchclip-install."; then
+  rm -rf "${INSTALL_TMP}"
+fi
+INSTALL_TMP=""
+
+# The destination itself may be File Provider-backed and attach FinderInfo a
+# moment after the bundle lands. Give it a short settling window, then strip
+# only the two attributes that code signing explicitly rejects.
+DELIVERED_SIGNATURE_VALID=0
+for _ in 1 2 3 4 5; do
+  sleep 0.1
+  DELIVERED_SIGNATURE_VALID=0
+  if command -v xattr >/dev/null 2>&1; then
+    xattr -dr com.apple.FinderInfo "${OUTPUT_APP}" 2>/dev/null || true
+    xattr -dr com.apple.ResourceFork "${OUTPUT_APP}" 2>/dev/null || true
+  fi
+  if codesign --verify --deep --strict --verbose=2 "${OUTPUT_APP}"; then
+    DELIVERED_SIGNATURE_VALID=1
+  fi
+done
+if [[ "${DELIVERED_SIGNATURE_VALID}" -ne 1 ]]; then
+  echo "error: delivered app failed strict code-signature verification" >&2
+  exit 1
+fi
+
+echo "Built signed native-architecture app:"
+echo "  ${OUTPUT_APP}"
+if [[ "${SIGNING_IDENTITY}" == "-" ]]; then
+  echo "Signature: local ad-hoc (not Developer ID or notarized)."
+else
+  echo "Signature: ${SIGNING_IDENTITY} (hardened runtime + secure timestamp)."
+  echo "This app is signed but not yet notarized."
+fi
+echo "This bundle is not universal."
