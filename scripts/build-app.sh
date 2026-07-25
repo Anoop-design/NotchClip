@@ -12,19 +12,27 @@ OWNED_SCRATCH=0
 STAGE_DIR=""
 INSTALL_TMP=""
 SIGNING_IDENTITY="-"
+CONFIGURATION="release"
 
 usage() {
   cat <<'EOF'
 Usage: scripts/build-app.sh [--output PATH] [--scratch PATH] [--sign IDENTITY]
+                            [--configuration debug|release]
 
   --output PATH   Destination .app bundle path (default: <repo>/dist/NotchClip.app)
   --scratch PATH  Optional build directory (default: mktemp -d). Staging always
                   uses a unique mktemp directory inside this path.
   --sign IDENTITY Code-sign with this identity, hardened runtime, and timestamp.
                   Default '-' creates a local ad-hoc signature.
+  --configuration Build configuration (default: release). Use 'debug' for a
+                  local build you intend to test and iterate on.
 
 Builds a signed native-architecture app bundle (not universal).
 Does not notarize, open, or launch the app.
+
+Honors a pre-set DEVELOPER_DIR and SDKROOT. Setting SDKROOT selects that exact
+SDK instead of the newest one; this is required when the toolchain that ships
+the newest SDK cannot supply every macro plugin the sources need.
 EOF
 }
 
@@ -43,6 +51,14 @@ while [[ $# -gt 0 ]]; do
     --sign)
       [[ $# -ge 2 ]] || { echo "error: --sign requires an identity" >&2; exit 2; }
       SIGNING_IDENTITY="$2"
+      shift 2
+      ;;
+    --configuration)
+      [[ $# -ge 2 ]] || { echo "error: --configuration requires debug or release" >&2; exit 2; }
+      case "$2" in
+        debug|release) CONFIGURATION="$2" ;;
+        *) echo "error: --configuration must be 'debug' or 'release', got: $2" >&2; exit 2 ;;
+      esac
       shift 2
       ;;
     -h|--help)
@@ -123,7 +139,15 @@ if [[ -z "${DEVELOPER_DIR:-}" ]]; then
   fi
 fi
 
-if command -v xcrun >/dev/null 2>&1; then
+# A pre-set SDKROOT names an exact SDK and must win. `xcrun --sdk macosx`
+# re-resolves to the newest installed SDK and would silently override it.
+if [[ -n "${SDKROOT:-}" ]]; then
+  if [[ ! -d "${SDKROOT}" ]]; then
+    echo "error: SDKROOT is set but not a directory: ${SDKROOT}" >&2
+    exit 1
+  fi
+  SWIFT=(swift)
+elif command -v xcrun >/dev/null 2>&1; then
   SWIFT=(xcrun --sdk macosx swift)
 else
   SWIFT=(swift)
@@ -143,7 +167,7 @@ ICON_MASTER="${REPO_ROOT}/Packaging/Assets/AppIconMaster.png"
 STAGE_DIR="$(mktemp -d "${SCRATCH}/notchclip-stage.XXXXXX")"
 STAGE_APP="${STAGE_DIR}/NotchClip.app"
 
-echo "Building NotchClip (release, native architecture)…"
+echo "Building NotchClip (${CONFIGURATION}, native architecture)…"
 echo "  repo:    ${REPO_ROOT}"
 echo "  scratch: ${SCRATCH}"
 echo "  stage:   ${STAGE_DIR}"
@@ -155,14 +179,14 @@ fi
 
 "${SWIFT[@]}" build \
   --package-path "${REPO_ROOT}" \
-  --configuration release \
+  --configuration "${CONFIGURATION}" \
   --product NotchClip \
   --scratch-path "${BUILD_DIR}"
 
 BIN=""
 if SHOW_BIN="$("${SWIFT[@]}" build \
   --package-path "${REPO_ROOT}" \
-  --configuration release \
+  --configuration "${CONFIGURATION}" \
   --product NotchClip \
   --scratch-path "${BUILD_DIR}" \
   --show-bin-path 2>/dev/null)"; then
@@ -179,7 +203,7 @@ if [[ -z "${BIN}" ]]; then
   done < <(find "${BUILD_DIR}" -type f -name NotchClip -print0 2>/dev/null | sort -z)
 fi
 if [[ -z "${BIN}" || ! -x "${BIN}" ]]; then
-  echo "error: release executable NotchClip not found under ${BUILD_DIR}" >&2
+  echo "error: ${CONFIGURATION} executable NotchClip not found under ${BUILD_DIR}" >&2
   exit 1
 fi
 
