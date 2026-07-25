@@ -6,16 +6,16 @@ The notch is a quick action surface, not the clipboard archive. It has one job: 
 
 This produces two complementary surfaces:
 
-1. **Quick Paste shelf** — a transient Dynamic-Island-style notch expansion with four clip positions and one All Clips destination.
+1. **Quick Paste shelf** — a transient Dynamic-Island-style notch expansion with eight clip positions and one All Clips destination.
 2. **All Clips library** — a durable, resizable macOS window for the complete searchable history.
 
 ## Quick shelf decisions
 
-- Hard limit: **four clips**.
-- Ordering: up to the two newest pinned clips, then the newest recent clips. Either group backfills unused positions.
-- Fixed non-scrolling layout. The user can learn where recent and pinned material appears instead of chasing an unbounded carousel.
+- Hard limit: **eight clips** (`QuickShelfPolicy.itemLimit`, asserted by `testShelfHasHardEightItemLimit`).
+- Ordering: up to the three newest pinned clips (`preferredPinnedLimit`), then the newest recent clips. Either group backfills unused positions.
+- Horizontally scrolling layout. At the expanded width roughly five of the eight cards are on screen at once; Left/Right moves selection and scrolls the focused card into view. The limit still holds the shelf to a bounded working set rather than the whole archive.
 - Search was removed. Command–F collapses the notch and opens All Clips with search focused.
-- Left/Right traverses the four clips and the All Clips tile. Return pastes a clip or opens the library.
+- Left/Right traverses the eight clips and the All Clips tile. Return pastes a clip or opens the library.
 - Click pastes; dragging the preview inserts the retained clipboard representation into another app.
 - Pin is visible as a badge. Pin/unpin remains in the context menu; delete is kept out of the transient shelf to prevent accidental destructive actions.
 - Space is only meaningful for retained images and files that Quick Look can actually preview.
@@ -40,7 +40,7 @@ Both surfaces preserve the app that was active before NotchClip appeared. A succ
 
 ## Accessibility
 
-- The four shelf cards and All Clips tile are named keyboard/VoiceOver destinations.
+- The shelf cards and All Clips tile are named keyboard/VoiceOver destinations.
 - AppKit drag bridges are folded into one semantic card/row element rather than exposed as duplicate controls.
 - Pin, paste, and delete are available as named accessibility actions where appropriate.
 - Native semantic type and colors are used in the library. Controls retain macOS focus rings, search behavior, and minimum target sizes.
