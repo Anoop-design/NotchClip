@@ -68,6 +68,12 @@ struct PanelRootView: View {
         .background(Color.clear)
         .environment(\.colorScheme, .dark)
         .opacity(visualState.contentOpacity)
+        // The content settles into place with the shell: a slight scale from
+        // the top plus a short rise, matching the island's inflate.
+        .scaleEffect(
+            motionReduced ? 1 : 0.97 + 0.03 * visualState.contentOpacity,
+            anchor: .top
+        )
         .offset(y: motionReduced ? 0 : CGFloat(1 - visualState.contentOpacity) * -6)
         .accessibilityElement(children: .contain)
         .accessibilityLabel("NotchClip clipboard history")
@@ -180,7 +186,7 @@ struct PanelRootView: View {
                 .padding(.horizontal, 6)
                 .padding(.vertical, 5)
             }
-            .scrollIndicators(.automatic)
+            .scrollIndicators(.never)
             .onChange(of: history.selectedID) { _, id in
                 guard let id, history.projection.contains(id: id) else { return }
                 withAnimation(motionReduced ? nil : .easeOut(duration: 0.16)) {
@@ -320,15 +326,17 @@ private struct ClipRow: View {
             glyph
 
             VStack(alignment: .leading, spacing: 1) {
+                // 13pt matches native menu items; the row should read like a
+                // system control, not a custom widget.
                 Text(row.primaryText)
-                    .font(.system(size: 12.5, weight: .medium))
+                    .font(.system(size: 13, weight: .regular))
                     .foregroundStyle(NotchClipDesign.primaryText)
                     .lineLimit(1)
                     .truncationMode(.tail)
 
                 if let secondary = row.secondaryText {
                     Text(secondary)
-                        .font(.system(size: 10.5))
+                        .font(.system(size: 11))
                         .foregroundStyle(NotchClipDesign.tertiaryText)
                         .lineLimit(1)
                         .truncationMode(.middle)
@@ -354,26 +362,10 @@ private struct ClipRow: View {
         .frame(height: PanelLayout.rowHeight)
         .contentShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
         .background {
+            // Neutral, menu-like selection: a light wash, no colour and no
+            // border — the same language as macOS dark-mode menus and HUDs.
             RoundedRectangle(cornerRadius: 8, style: .continuous)
                 .fill(background)
-        }
-        .overlay(alignment: .leading) {
-            // A keyboard-driven picker needs its selection readable at a glance,
-            // so selection gets the accent colour plus a leading marker rather
-            // than the barely-there white wash used for hover.
-            if isSelected {
-                RoundedRectangle(cornerRadius: 2, style: .continuous)
-                    .fill(Color.accentColor)
-                    .frame(width: 3, height: PanelLayout.rowHeight - 16)
-                    .padding(.leading, 2)
-                    .accessibilityHidden(true)
-            }
-        }
-        .overlay {
-            if isSelected {
-                RoundedRectangle(cornerRadius: 8, style: .continuous)
-                    .strokeBorder(Color.accentColor.opacity(0.55), lineWidth: 1)
-            }
         }
         .animation(reduceMotion ? nil : .easeOut(duration: 0.10), value: isSelected)
         .animation(reduceMotion ? nil : .easeOut(duration: 0.10), value: isHovering)
@@ -438,7 +430,7 @@ private struct ClipRow: View {
     }
 
     private var background: Color {
-        if isSelected { return Color.accentColor.opacity(0.22) }
+        if isSelected { return Color.white.opacity(0.14) }
         if isHovering { return NotchClipDesign.surfaceHover }
         return .clear
     }
@@ -491,7 +483,7 @@ private struct ClipPreviewPane: View {
                 .padding(.horizontal, 14)
                 .padding(.bottom, 14)
             }
-            .scrollIndicators(.automatic)
+            .scrollIndicators(.never)
 
             footer(for: entry)
         }

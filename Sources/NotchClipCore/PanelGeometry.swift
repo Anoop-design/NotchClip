@@ -88,11 +88,13 @@ public enum PanelGeometry {
         let capH = min(max(capHeight, 12), max(12, rect.height * 0.42))
         let bodyTop = rect.maxY - capH
         let availableBodyHeight = max(0, bodyTop - rect.minY)
-        // Horizontal growth leads slightly while vertical growth settles with a
-        // smoothstep. This keeps the morph attached to the physical notch and
-        // avoids the rectangular first half of a linear resize.
+        // Dynamic-Island inflation: both dimensions are strong ease-outs, so the
+        // shape balloons from the housing in every direction at once and then
+        // settles. The earlier smoothstep vertical made width race ahead and
+        // height lag, which read as a sheet unfurling *below* the notch instead
+        // of the notch itself opening.
         let horizontalProgress = 1 - CGFloat(pow(Double(1 - p), 2.2))
-        let verticalProgress = p * p * (3 - 2 * p)
+        let verticalProgress = 1 - CGFloat(pow(Double(1 - p), 1.9))
         let bodyHeight = availableBodyHeight * verticalProgress
         let bodyWidth = capW + max(0, rect.width - capW) * horizontalProgress
         let bodyRect = CGRect(

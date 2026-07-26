@@ -92,6 +92,9 @@ struct SettingsView: View {
                     Button("Set Up Automatic Paste…") {
                         onSetUpAccessibility()
                     }
+                    Text("Already allowed it before? macOS ties the permission to the exact copy of the app, so an updated or rebuilt NotchClip must be removed from the Accessibility list (with the − button) and added again.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
                 }
             }
             Section("Capture") {
@@ -101,6 +104,15 @@ struct SettingsView: View {
                 )) {
                     Text(isPaused ? "Paused" : "Monitoring clipboard")
                 }
+                Toggle(isOn: Binding(
+                    get: { history.preferences.showCapturePulse },
+                    set: { history.setShowCapturePulse($0) }
+                )) {
+                    Text("Acknowledge copies at the notch")
+                }
+                Text("Briefly shows “Copied” at the notch when something new is captured. Off by default.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
             }
         }
         .settingsFormChrome()

@@ -18,6 +18,9 @@ final class AccessibilityPermissionState {
     @ObservationIgnored private let authorizationCheck: @MainActor () -> Bool
     @ObservationIgnored private let authorizationRequest: @MainActor () -> Bool
     @ObservationIgnored private let settingsOpener: @MainActor () -> Bool
+    /// Paste-path-only readiness probe; may perform a system request. Nil falls
+    /// back to `authorizationCheck` so injected test states stay side-effect-free.
+    @ObservationIgnored private let dispatchReadinessCheck: (@MainActor () -> Bool)?
     @ObservationIgnored private let pollingIntervalNanoseconds: UInt64
     @ObservationIgnored private let waitingTimeoutNanoseconds: UInt64
     @ObservationIgnored var onPermissionGranted: (() -> Void)?
@@ -35,11 +38,13 @@ final class AccessibilityPermissionState {
             AccessibilityAuthorization.openSystemSettings()
         },
         pollingIntervalNanoseconds: UInt64 = 500_000_000,
-        waitingTimeoutNanoseconds: UInt64 = 2_500_000_000
+        waitingTimeoutNanoseconds: UInt64 = 2_500_000_000,
+        dispatchReadinessCheck: (@MainActor () -> Bool)? = nil
     ) {
         self.authorizationCheck = authorizationCheck
         self.authorizationRequest = authorizationRequest
         self.settingsOpener = settingsOpener
+        self.dispatchReadinessCheck = dispatchReadinessCheck
         self.pollingIntervalNanoseconds = pollingIntervalNanoseconds
         self.waitingTimeoutNanoseconds = waitingTimeoutNanoseconds
         self.isGranted = authorizationCheck()
@@ -142,6 +147,19 @@ final class AccessibilityPermissionState {
         update(isGranted: authorizationCheck())
     }
 
+    /// Gate for the automatic-paste path. When the passive check fails, one
+    /// active readiness probe runs before giving up — recovering the state
+    /// where AX trust exists but the event-post preflight is stale.
+    func ensureReadyForDispatch() -> Bool {
+        refresh()
+        if isGranted { return true }
+        let ready = (dispatchReadinessCheck ?? authorizationCheck)()
+        if ready {
+            update(isGranted: true)
+        }
+        return ready
+    }
+
     func beginMonitoring() {
         refresh()
         guard !isGranted, pollingTask == nil else { return }
@@ -241,7 +259,6 @@ final class AccessibilityPermissionOnboardingController: NSObject, NSWindowDeleg
     let state: AccessibilityPermissionState
     private var window: NSWindow?
     private var closeReason: CloseReason = .userDismissed
-    private var previousActivationPolicy: NSApplication.ActivationPolicy?
     var onPermissionGranted: (() -> Void)?
 
     init(
@@ -360,8 +377,9 @@ final class AccessibilityPermissionOnboardingController: NSObject, NSWindowDeleg
         window.center()
 
         self.window = window
-        previousActivationPolicy = NSApp.activationPolicy()
-        _ = NSApp.setActivationPolicy(.regular)
+        // Stay an accessory app: LSUIElement processes can present key windows
+        // without switching to .regular, and flipping the activation policy made
+        // a Dock icon flash in and out around every permission prompt.
         window.orderFrontRegardless()
         NSApp.activate(ignoringOtherApps: true)
         window.makeKeyAndOrderFront(nil)
@@ -388,7 +406,6 @@ final class AccessibilityPermissionOnboardingController: NSObject, NSWindowDeleg
             defaults.set(Self.currentOnboardingVersion, forKey: Self.deferredVersionDefaultsKey)
         }
         window = nil
-        restoreActivationPolicy()
     }
 
     private func permissionWasGranted() {
@@ -421,12 +438,6 @@ final class AccessibilityPermissionOnboardingController: NSObject, NSWindowDeleg
 
     private func openAccessibilitySettings() {
         state.retryPermission()
-    }
-
-    private func restoreActivationPolicy() {
-        guard let previousActivationPolicy else { return }
-        _ = NSApp.setActivationPolicy(previousActivationPolicy)
-        self.previousActivationPolicy = nil
     }
 
     private var persistedOnboardingState: AccessibilityOnboardingState {

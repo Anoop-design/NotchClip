@@ -203,6 +203,11 @@ final class HistoryModel {
         isPaused = paused
     }
 
+    func setShowCapturePulse(_ enabled: Bool) {
+        preferences.showCapturePulse = enabled
+        preferences.save()
+    }
+
     func setFetchLinkPreviews(_ enabled: Bool) {
         preferences.fetchLinkPreviews = enabled
         preferences.save()

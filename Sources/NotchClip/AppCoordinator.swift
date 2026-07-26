@@ -33,7 +33,9 @@ final class AppCoordinator: NSObject {
     }
 
     init(hotKey: (any HotKeyRegistering)? = nil) {
-        let accessibility = AccessibilityPermissionState()
+        let accessibility = AccessibilityPermissionState(
+            dispatchReadinessCheck: { AccessibilityAuthorization.ensureReadyToPostEvents() }
+        )
         self.accessibility = accessibility
         self.pasteDispatcher = PasteCommandDispatcher(accessibility: accessibility)
         self.accessibilityOnboarding = AccessibilityPermissionOnboardingController(
@@ -162,7 +164,8 @@ final class AppCoordinator: NSObject {
             monitor.onCapture = { [weak self] result in
                 guard let self else { return }
                 self.history.applyCaptureResult(result)
-                // Acknowledge the capture at the notch when the panel is closed.
+                // Opt-in acknowledgment at the notch while the panel is closed.
+                guard self.history.preferences.showCapturePulse else { return }
                 let phase = self.panelController?.phase ?? .hidden
                 if CapturePulsePolicy.shouldShow(result: result, panelPhase: phase),
                    let entry = CapturePulsePolicy.entry(for: result) {

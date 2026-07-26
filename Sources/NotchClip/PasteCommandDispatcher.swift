@@ -108,8 +108,10 @@ final class PasteCommandDispatcher {
             return
         }
 
-        accessibility.refresh()
-        guard accessibility.isGranted else {
+        // Entry gate may perform one active readiness probe (recovers a stale
+        // preflight after TCC changes); the final pre-post check below stays
+        // passive because the destination is already activating.
+        guard accessibility.ensureReadyForDispatch() else {
             completion(.failure(DispatchFailure.accessibilityPermissionRequired))
             return
         }

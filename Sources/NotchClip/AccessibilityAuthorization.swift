@@ -27,6 +27,19 @@ enum AccessibilityAuthorization {
         isAXTrusted && canPostEvents
     }
 
+    /// Readiness check for the explicit paste path only.
+    ///
+    /// Unlike `isGranted` (safe to poll), this may perform a system event-post
+    /// request when AX trust exists but the CG preflight disagrees — a state TCC
+    /// can briefly enter after Settings changes. The request returns true
+    /// silently when the grant actually exists and false without UI when it was
+    /// denied, so a user who already decided is never re-prompted here.
+    static func ensureReadyToPostEvents() -> Bool {
+        if isGranted { return true }
+        guard AXIsProcessTrusted() else { return false }
+        return CGRequestPostEventAccess()
+    }
+
     /// Requests the system-owned Accessibility prompt after a user action.
     /// The return value is the authorization state at the instant of the call;
     /// it normally remains `false` until the user finishes in System Settings.

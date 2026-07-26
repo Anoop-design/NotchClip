@@ -250,6 +250,20 @@ struct ProductOnboardingView: View {
                     .foregroundStyle(NotchClipDesign.secondaryText)
                     .multilineTextAlignment(.center)
                     .padding(.top, 10)
+
+                // The stale-grant trap: macOS keys this permission to the exact
+                // build, so an updated copy shows as enabled in Settings while
+                // the grant no longer applies. Shown only to users who have
+                // been through the request before.
+                if state.hasRequestedPermission {
+                    Text("If NotchClip already appears in the Accessibility list but this still says it's required, remove it with the − button and add it again — macOS ties the permission to the exact copy of the app.")
+                        .font(.system(size: 12, weight: .regular))
+                        .foregroundStyle(NotchClipDesign.tertiaryText)
+                        .multilineTextAlignment(.center)
+                        .frame(maxWidth: 520)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .padding(.top, 6)
+                }
             }
 
             Spacer(minLength: 18)
