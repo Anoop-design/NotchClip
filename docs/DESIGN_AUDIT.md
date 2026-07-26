@@ -2,48 +2,67 @@
 
 ## Outcome
 
-The notch is a quick action surface, not the clipboard archive. It has one job: expose a predictable working set and get a clip into the app the user was already using. Search, filtering, destructive actions, and long-term browsing belong in a standard Mac window.
+> **Superseded 2026-07-26.** The original two-surface split described below was
+> replaced by a single unified panel. The reasoning that produced the split is
+> kept because it still explains the constraints; the decisions section now
+> describes what shipped.
 
-This produces two complementary surfaces:
+The notch is the app. Control–V morphs it into a translucent panel that holds the
+entire searchable clipboard history, and gets a clip into the app the user was
+already using. There is no second window.
 
-1. **Quick Paste shelf** — a transient Dynamic-Island-style notch expansion with eight clip positions and one All Clips destination.
-2. **All Clips library** — a durable, resizable macOS window for the complete searchable history.
+### Why the original two-surface split was abandoned
 
-## Quick shelf decisions
+The first design split the product into a bounded four-clip "quick shelf" at the
+notch and a separate resizable "All Clips" library window. In practice:
 
-- Hard limit: **eight clips** (`QuickShelfPolicy.itemLimit`, asserted by `testShelfHasHardEightItemLimit`).
-- Ordering: up to the three newest pinned clips (`preferredPinnedLimit`), then the newest recent clips. Either group backfills unused positions.
-- Horizontally scrolling layout. At the expanded width roughly five of the eight cards are on screen at once; Left/Right moves selection and scrolls the focused card into view. The limit still holds the shelf to a bounded working set rather than the whole archive.
-- Search was removed. Command–F collapses the notch and opens All Clips with search focused.
-- Left/Right traverses the eight clips and the All Clips tile. Return pastes a clip or opens the library.
-- Click pastes; dragging the preview inserts the retained clipboard representation into another app.
-- Pin is visible as a badge. Pin/unpin remains in the context menu; delete is kept out of the transient shelf to prevent accidental destructive actions.
-- Space is only meaningful for retained images and files that Quick Look can actually preview.
-- The shell is forced dark because it is visually continuous with the physical notch. Reduce Motion and Reduce Transparency continue to use their system-specific paths.
+- The shelf grew to eight clips and gained horizontal scrolling anyway, because a
+  fixed handful was never enough to find the clip you wanted.
+- Reaching real history meant a second, opaque, title-barred window appearing over
+  everything — which read as a different application launching, not as the notch
+  expanding.
+- Two surfaces meant two layouts, two selection models, two preview lifecycles, and
+  a handoff between them that needed its own dismissal reason and focus choreography.
+- The library spent its width on a 300pt static sidebar and a mostly-empty inspector,
+  leaving the clip list — the actual content — the narrowest column.
 
-## All Clips decisions
+The bounded shelf was solving for glanceability. Search-first with keyboard
+navigation solves the same problem without capping what you can reach.
 
-- Standard titled, resizable macOS window rather than a second borderless island.
-- Native sidebar scopes: All Items, Pinned, Text, Links, Images, and Files.
-- Native list with Pinned and Recent sections, search, source/timestamp metadata, missing-file states, and system light/dark appearance.
-- Search is independent from the quick shelf and debounced before filtering.
-- Rows support exact-entry paste, drag, pin/unpin, conditional Quick Look, and confirmed deletion.
-- Keyboard: Up/Down selects, Return pastes, Space previews, Command–F focuses search, and Escape clears search before closing.
-- Empty history, no results, paused capture, storage failure, and capture error each have an explicit state.
-- Image/file previews are requested only as rows become visible. The notch and library have separate preview-surface lifecycles so a handoff does not cancel the incoming surface.
+## Unified panel decisions
+
+- One surface: a translucent HUD that grows from the notch, sized 780×620.
+- The search field owns focus for the entire presentation. Typing filters; there is
+  no separate "enter search mode".
+- The list is the complete history, sectioned Pinned / Today / Yesterday / Earlier,
+  at ~46pt per row so roughly eleven are visible at once.
+- The preview pane shows the selection's **complete** content. Row summaries still
+  use the collapsed 200-character `previewText`, but the pane loads the full retained
+  payload off-main so long text and code keep their line structure.
+- Filters moved from a sidebar to ⌘1–⌘6 plus a compact menu, returning that width
+  to content.
+- Selection uses the accent colour with a leading marker. In a keyboard-driven
+  picker the selected row must be identifiable without hunting.
+- Escape narrows before it closes: clear the query, then reset the scope, then
+  dismiss. Destructive-feeling gestures are never the first thing Escape does.
+- The cap over the physical camera housing stays true black so the shell reads as
+  continuous hardware; only the body is glass. Reduce Transparency gets an opaque
+  surface, Reduce Motion drops the geometry morph.
+- Pin, delete, and Quick Look are on the row context menu and on ⌘P / ⌘Delete / ⌘Y.
+  Delete is deliberately not a bare keystroke.
 
 ## Focus and paste lifecycle
 
-Opening All Clips from the notch is a dedicated dismissal reason. The notch finishes its collapse before the library is presented, and the transition neither restores the previous app nor starts a paste.
+The panel preserves the app that was active before NotchClip appeared. A successful selection writes the exact entry on the dedicated paste queue, closes the panel, returns focus, then dispatches Command–V when Accessibility permission is available. Without that permission, the clipboard write still succeeds and the destination is reactivated for a manual Command–V.
 
-Both surfaces preserve the app that was active before NotchClip appeared. A successful selection writes the exact entry on the dedicated paste queue, closes NotchClip's active surface, returns focus, then dispatches Command–V when Accessibility permission is available. Without that permission, the clipboard write still succeeds and the destination is reactivated for a manual Command–V.
+Collapsing to one surface removed the handoff entirely: there is no longer a dismissal reason that hands focus to a second window, and no window-swap during which a paste could target the wrong destination.
 
 ## Accessibility
 
-- The shelf cards and All Clips tile are named keyboard/VoiceOver destinations.
-- AppKit drag bridges are folded into one semantic card/row element rather than exposed as duplicate controls.
-- Pin, paste, and delete are available as named accessibility actions where appropriate.
-- Native semantic type and colors are used in the library. Controls retain macOS focus rings, search behavior, and minimum target sizes.
+- Rows are named keyboard/VoiceOver destinations carrying kind, pin state, missing-file state, source, and time.
+- AppKit drag bridges are folded into one semantic row element rather than exposed as duplicate controls.
+- Pin, paste, and delete are available as named accessibility actions.
+- Controls retain macOS focus rings, search behavior, and minimum target sizes.
 - Reduce Motion removes the geometry morph; Reduce Transparency selects opaque chrome.
 
 ## Apple on-device Foundation Models
@@ -52,7 +71,7 @@ Foundation Models should **not** be in the v1 retrieval or paste path.
 
 - The relevant on-device language model APIs begin on macOS 26, while NotchClip supports macOS 14.
 - Runtime availability alone is insufficient. On the audit Mac, the model reported available but rejected the current `en_IN` locale, so any future feature must also gate locale, context availability, and actual inference errors.
-- The best later use is opt-in generation of a short title and three or four tags for long text/code clips inside All Clips.
+- The best later use is opt-in generation of a short title and three or four tags for long text/code clips, shown in the preview pane.
 - A generative model is not the right base primitive for semantic search. Start with indexed lexical search, then consider local Natural Language sentence embeddings.
 - Vision should handle image OCR on macOS 14+.
 - A language model must never be the privacy boundary for password/secret detection.

@@ -6,6 +6,10 @@ reference; nothing here is inferred from the README.
 This document complements [DESIGN_AUDIT.md](DESIGN_AUDIT.md), which records the *product
 decisions*. Where the two disagree, DESIGN_AUDIT.md has been corrected to match the code.
 
+**Status, 2026-07-26.** The two-surface structure this audit examined has since been
+replaced by a single translucent panel. Items resolved by that work are marked
+**[FIXED]** below; the rest are unchanged and still open.
+
 Findings are split into three kinds, because they deserve different responses:
 
 - **Defects** — the code does something a user would call wrong.
@@ -16,7 +20,7 @@ Findings are split into three kinds, because they deserve different responses:
 
 ## A. Defects
 
-### A1. Text clips are permanently truncated to 200 characters, everywhere
+### A1. Text clips are permanently truncated to 200 characters, everywhere — **[FIXED]**
 
 **The single highest-impact issue.**
 
@@ -38,11 +42,11 @@ Consequences:
 The full bytes are on disk the whole time — `payloadRefs` holds the complete
 `public.utf8-plain-text` representation. Nothing reads it for display.
 
-**Fix:** load the full plain-text payload for the *selected* entry only, off-main, using
-the same shape as `PreviewLoader.load` (`HistoryModel.swift:559`). Render it in the
-inspector with preserved newlines and `.textSelection(.enabled)`. Keep the 200-char
-collapsed `previewText` for row summaries, where it is correct. Scoped, uses machinery
-that already exists, and does not touch the capture path.
+**Fixed.** `FullTextLoader` decodes the complete retained payload for the selected entry
+only, off the main actor, behind a bounded 24-entry cache (`HistoryModel.requestFullText`).
+The panel's preview pane renders it with real line breaks and `.textSelection(.enabled)`,
+monospaced for markup. Row summaries still use the collapsed `previewText`, where it is
+correct. The capture path is untouched.
 
 ### A2. Link previews default to ON and are never disclosed during onboarding
 
@@ -78,10 +82,9 @@ the reason it should come before any other data feature.
 
 ### A4. Dead state from removed features
 
-- `PanelVisualState.focusRequestID` / `requestSearchFocus()` are documented as driving
-  `@FocusState` (`PanelVisualState.swift:18-27`). `PanelRootView` has no search field and
-  no `@FocusState` — shelf search was removed. `NotchPanelController.finishKeyAndFocus()`
-  still calls it (`NotchPanelController.swift:382`) and nothing consumes it.
+- ~~`PanelVisualState.focusRequestID` / `requestSearchFocus()` have no consumer.~~
+  **[FIXED]** — the unified panel restored a search field, and its `@FocusState` is now
+  driven by `focusRequestID`. ⌘F also routes through it.
 - `AppCoordinator.openSettings()` and `settingsOpen` (`AppCoordinator.swift:22,180`) are
   never called or read; the menu uses `SettingsLink`.
 
@@ -105,7 +108,7 @@ All confirmed absent by search across `Sources/`.
 |---|---|---|
 | **Launch at login** | A clipboard manager that isn't running misses history, and there is no way to notice until you need a clip that was never captured. Arguably the highest user-visible value here. | Small — `SMAppService.mainApp` + a Settings toggle |
 | **Configurable shortcut** | ⌃V is fixed (`NotchClipHotKey`, `HotKeySeam.swift:65-71`) and registered `kEventHotKeyExclusive` (`CarbonHotKeyRegistrar.swift:63`), so it is claimed system-wide. ⌃V is also a standard Cocoa emacs-style binding (page-down in text views), so the collision is structural, not hypothetical. The author clearly anticipated conflict — there is a full registration-error path surfaced in the menu and Settings — but no way to actually resolve one. | Medium — recorder UI + persistence; the `HotKeyRegistering` seam is already there |
-| **⌘1–⌘8 direct select** | The shelf holds eight items but only arrow traversal, so reaching item 8 is seven keypresses in a surface whose entire purpose is speed. Digit selection is the norm in this category. | Small — extend the `keyMonitor` switch (`NotchPanelController.swift:736`) |
+| **⌘1–⌘9 direct select** | Still open. ⌘1–⌘6 now select *filters*, not items, so digit-select for rows needs a different modifier (⌥1–⌥9 would be free). Search plus Up/Down covers most of the need now that the list is not capped. | Small — extend `handleCommandKey` |
 | **Paste as plain text** | Pasting rich text into a styled document and having it carry source formatting is the most common clipboard-manager annoyance. The engine already retains every representation separately, so writing only `public.utf8-plain-text` is a filter over existing data. | Small — a `paste(entry:preferring:)` variant |
 | **History retention limit** | History is unbounded forever. Combined with A3 this is both a performance and a privacy exposure — a clip from six months ago is still on disk. | Small — a "keep for N days" sweep at launch |
 | **Excluded applications** | Nothing retained from password managers unless they set `ConcealedType`. Many apps don't. DESIGN_AUDIT.md lists this as a prerequisite for any future enrichment; it is really a prerequisite for the current feature set. | Small–medium — bundle-ID denylist checked in `ClipboardSourceProvider` |
@@ -118,7 +121,7 @@ All confirmed absent by search across `Sources/`.
 These are deliberate and defensible. Listed with their cost so they can be re-decided
 rather than rediscovered.
 
-### C1. Eight scrolling cards in a 660pt shelf
+### C1. Eight scrolling cards in a 660pt shelf — **[RESOLVED by the redesign]**
 
 The shelf is capped at eight (`QuickShelfPolicy.itemLimit`), rendered as 100×108 cards in a
 horizontal `ScrollView` with `.scrollIndicators(.never)` (`PanelContentView.swift:106,136`).
@@ -138,23 +141,22 @@ Intentional — keeps destructive actions out of a transient surface. Reasonable
 available there, so the shelf is not purely non-destructive, and the asymmetry may read as
 an omission rather than a choice.
 
-### C3. Space beeps for text clips in the library
+### C3. Space beeps for text clips in the library — **[RESOLVED by the redesign]**
 
-`quickLookSelection` calls `NSSound.beep()` for anything that isn't an image or file list
-(`ClipboardLibraryController.swift:221-229`). Once A1 is fixed and the inspector shows full
-text, Space could reasonably expand the text instead of rejecting the gesture. A beep is a
-harsh response to a reasonable action.
+The library window that beeped is gone. Space is now ordinary text input for the
+always-focused search field, and Quick Look moved to ⌘Y, so the gesture can no longer be
+rejected with a beep.
 
 ---
 
 ## Suggested order
 
-1. **A1** — full text in the inspector. Biggest gap between what is stored and what is shown.
-2. **Launch at login** — small, and the app is not dependable without it.
+1. ~~**A1** — full text in the preview.~~ Done.
+2. **Launch at login** — small, and the app is not dependable without it. Now the top item.
 3. **A2** — link-preview default. Small, and it is a stated-values issue.
-4. **⌘1–8 and paste-as-plain-text** — two small changes that disproportionately affect daily speed.
+4. **Paste-as-plain-text** — small, disproportionate effect on daily use.
 5. **A3** — the storage migration. Largest, and it gates retention limits and any future indexing.
-6. **A4, A5** — cleanup and feedback polish.
+6. **A5** — silent skip feedback, and the remaining dead `settingsOpen`.
 
 ## Not assessed
 

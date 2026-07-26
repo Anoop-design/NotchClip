@@ -239,49 +239,83 @@ final class HotKeySeamTests: XCTestCase {
     }
 }
 
-final class HistoryQueryTests: XCTestCase {
-    func testFilteringAndPinnedSections() {
-        let pinned = ClipboardEntry(
-            isPinned: true,
-            primaryKind: .plainText,
-            previewText: "Pinned Swift",
-            searchText: "pinned swift",
-            fingerprint: "p"
+/// ClipProjection replaced HistoryQuery when the two surfaces merged into one
+/// panel. These carry over the original filtering / navigation coverage and add
+/// the scope filter the sidebar used to provide.
+final class ClipProjectionTests: XCTestCase {
+    private func entry(
+        _ text: String,
+        kind: ClipboardContentKind = .plainText,
+        pinned: Bool = false,
+        updatedAt: Date = .now
+    ) -> ClipboardEntry {
+        ClipboardEntry(
+            updatedAt: updatedAt,
+            isPinned: pinned,
+            primaryKind: kind,
+            previewText: text,
+            searchText: text.lowercased(),
+            fingerprint: text
         )
-        let recent = ClipboardEntry(
-            isPinned: false,
-            primaryKind: .plainText,
-            previewText: "Recent notes",
-            searchText: "recent notes",
-            fingerprint: "r"
-        )
-        let other = ClipboardEntry(
-            isPinned: false,
-            primaryKind: .url,
-            previewText: "https://example.com",
-            searchText: "https://example.com",
-            fingerprint: "u"
-        )
-        let sections = HistoryQuery.sections(from: [recent, other, pinned], query: "swift")
-        XCTAssertEqual(sections.pinned.map(\.fingerprint), ["p"])
-        XCTAssertTrue(sections.recent.isEmpty)
-
-        let all = HistoryQuery.sections(from: [recent, other, pinned], query: "")
-        XCTAssertEqual(all.pinned.count, 1)
-        XCTAssertEqual(all.recent.count, 2)
-        XCTAssertEqual(all.allInDisplayOrder.first?.isPinned, true)
     }
 
-    func testSelectionNavigation() {
-        let a = ClipboardEntry(primaryKind: .plainText, previewText: "a", searchText: "a", fingerprint: "a")
-        let b = ClipboardEntry(primaryKind: .plainText, previewText: "b", searchText: "b", fingerprint: "b")
-        let sections = HistorySections(pinned: [], recent: [a, b])
-        let first = HistoryQuery.moveSelection(currentID: nil, delta: 1, sections: sections)
-        XCTAssertEqual(first, a.id)
-        let second = HistoryQuery.moveSelection(currentID: a.id, delta: 1, sections: sections)
-        XCTAssertEqual(second, b.id)
-        let clamped = HistoryQuery.moveSelection(currentID: b.id, delta: 1, sections: sections)
-        XCTAssertEqual(clamped, b.id)
+    func testFilteringAndPinnedSections() {
+        let pinned = entry("Pinned Swift", pinned: true)
+        let recent = entry("Recent notes")
+        let other = entry("https://example.com", kind: .url)
+
+        let projection = ClipProjection.make(
+            entries: [recent, other, pinned],
+            query: "swift",
+            scope: .all
+        )
+
+        XCTAssertEqual(projection.visibleEntries.map(\.id), [pinned.id])
+        XCTAssertEqual(projection.sections.map(\.title), ["Pinned"])
+        XCTAssertTrue(projection.contains(id: pinned.id))
+        XCTAssertFalse(projection.contains(id: recent.id))
+    }
+
+    func testScopeNarrowsToOneKind() {
+        let text = entry("plain note")
+        let link = entry("https://example.com", kind: .url)
+
+        let links = ClipProjection.make(entries: [text, link], query: "", scope: .links)
+        XCTAssertEqual(links.visibleEntries.map(\.id), [link.id])
+
+        let all = ClipProjection.make(entries: [text, link], query: "", scope: .all)
+        XCTAssertEqual(all.visibleEntries.count, 2)
+    }
+
+    func testScopeShortcutNumbersRoundTrip() {
+        for scope in ClipScope.allCases {
+            XCTAssertEqual(ClipScope.scope(forShortcutNumber: scope.shortcutNumber), scope)
+        }
+        XCTAssertNil(ClipScope.scope(forShortcutNumber: 0))
+        XCTAssertNil(ClipScope.scope(forShortcutNumber: ClipScope.allCases.count + 1))
+    }
+
+    func testSelectionNavigationClampsAtBothEnds() {
+        let newer = entry("a", updatedAt: Date(timeIntervalSinceReferenceDate: 200))
+        let older = entry("b", updatedAt: Date(timeIntervalSinceReferenceDate: 100))
+        let projection = ClipProjection.make(entries: [older, newer], query: "", scope: .all)
+
+        // Recency ordering puts the newer entry first.
+        XCTAssertEqual(projection.visibleEntries.map(\.id), [newer.id, older.id])
+
+        XCTAssertEqual(projection.moveSelection(from: nil, delta: 1), newer.id)
+        XCTAssertEqual(projection.moveSelection(from: newer.id, delta: 1), older.id)
+        XCTAssertEqual(projection.moveSelection(from: older.id, delta: 1), older.id)
+        XCTAssertEqual(projection.moveSelection(from: newer.id, delta: -1), newer.id)
+        // A page-sized jump past the end clamps rather than wrapping.
+        XCTAssertEqual(projection.moveSelection(from: newer.id, delta: 8), older.id)
+    }
+
+    func testEmptyProjectionHasNoSelection() {
+        let projection = ClipProjection.make(entries: [], query: "", scope: .all)
+        XCTAssertTrue(projection.visibleEntries.isEmpty)
+        XCTAssertTrue(projection.sections.isEmpty)
+        XCTAssertNil(projection.moveSelection(from: nil, delta: 1))
     }
 }
 

@@ -1,6 +1,6 @@
 # NotchClip
 
-Personal macOS clipboard history that opens as a compact, Dynamic-Island-style shelf from the MacBook notch (macOS 14+).
+Personal macOS clipboard history. Control–V morphs the MacBook notch into a translucent, Dynamic-Island-style panel holding your entire searchable history (macOS 14+).
 
 ## Requirements
 
@@ -71,17 +71,23 @@ That pipeline signs the app with hardened runtime and a secure timestamp; submit
 
 Open the `.app` yourself from Finder. The local ad-hoc signature is sufficient for this locally built copy, but it is not suitable for distribution to other Macs.
 
+NotchClip has **one surface**. Control–V morphs the notch into a translucent panel
+containing the entire searchable history — there is no second window.
+
 | Action | Behavior |
 |--------|----------|
 | **Control–V** | Global hotkey toggles the clipboard panel (Carbon exclusive registration) |
-| **Menu bar** | NotchClip menu: Show Clipboard, All Clips, Pause/Resume, Settings, Quit |
-| **Click outside / Escape** | Dismisses the panel |
-| **Quick shelf** | Shows at most four clips: up to two newest pins plus the newest recent clips, with unused space backfilled. Left/Right moves through the four clips and the All Clips tile; Return pastes or opens the library. |
-| **All Clips** | Opens a resizable, searchable library with All, Pinned, Text, Links, Images, and Files filters. Command–F moves directly from the notch into library search. |
-| **Paste** | Return writes the exact selected entry to the general pasteboard, closes the active surface, restores the previous app, and sends Command–V (the first-run setup explains and requests Accessibility for automatic delivery). |
-| **Pin / delete** | Manage history from library row actions or context menus. Pinning prioritizes an entry for the quick shelf and preserves it during “clear unpinned.” |
-| **Drag out** | Drag a row directly into pasteboard-aware destinations / input fields |
-| **Quick Look** | Space previews supported images and files; Space or Escape closes the preview. |
+| **Menu bar** | NotchClip menu: Show Clipboard, Pause/Resume, Settings, Quit |
+| **Search** | The search field holds focus for the whole presentation — just type to filter. Command–F returns focus to it. |
+| **List** | The complete history, sectioned into Pinned, Today, Yesterday, and Earlier. Up/Down move, Page Up/Down jump, Home/End go to the ends. |
+| **Preview** | The selected clip's **complete** contents, with real line breaks (monospaced for markup), plus its source, time, and retained size. |
+| **Filters** | Command–1 through Command–6 select All, Pinned, Text, Links, Images, or Files. Also available from the menu in the search header. |
+| **Paste** | Return writes the exact selected entry to the general pasteboard, closes the panel, restores the previous app, and sends Command–V (the first-run setup explains and requests Accessibility for automatic delivery). |
+| **Pin / delete** | Command–P pins, Command–Delete deletes, or use the row context menu. Pinning sorts an entry to the top and preserves it during “clear unpinned.” |
+| **Drag out** | Drag a row's artwork directly into pasteboard-aware destinations / input fields |
+| **Quick Look** | Command–Y previews supported images and files; Escape closes the preview. |
+| **Escape** | Narrows before closing: clears the search, then resets the filter, then dismisses. |
+| **Click outside** | Dismisses the panel |
 
 ## Clipboard content
 
@@ -125,8 +131,8 @@ Disable the toggle to stop network metadata fetches. **Clear Link Preview Cache*
 
 | Target | Role |
 |--------|------|
-| `NotchClipCore` | Models, pasteboard parse/write, storage, monitor, presentation helpers, link-preview policy/cache |
-| `NotchClip` | Menu-bar app, bounded notch shelf, full-history library, hotkey, Quick Look, drag-out |
+| `NotchClipCore` | Models, pasteboard parse/write, storage, monitor, panel geometry, scope/projection filtering, link-preview policy/cache |
+| `NotchClip` | Menu-bar app, unified notch history panel, hotkey, Quick Look, drag-out |
 | `NotchClipCoreTests` | Deterministic unit tests |
 
 Bundle identity (source of truth: `Packaging/Info.plist`): `com.anoop.notchclip`, agent app (`LSUIElement` = true, no Dock icon), macOS 14.0 minimum.
@@ -137,7 +143,7 @@ On first launch, NotchClip shows a one-time explanation before asking macOS for 
 
 - **Native architecture only** — the local path uses an ad-hoc signature; the release path supports Developer ID, notarization, stapling, and Gatekeeper validation.  
 - A polished drag-to-Applications DMG workflow and custom app icon are included. A real notarized artifact still requires the developer certificate and notary credentials described above.  
-- **No launch-at-login** and **no configurable global shortcut** yet (Control–V is fixed).  
+- **No launch-at-login** and **no configurable global shortcut** yet (Control–V is fixed). See [docs/UX_AUDIT.md](docs/UX_AUDIT.md) for the full gap list.  
 - GUI automation / interactive GUI tests are not part of the package test suite.  
 - The current atomic JSON history store is appropriate for a personal v1, but an indexed SQLite/FTS migration is planned before histories reach many thousands of entries.
 - Copies distributed to other Macs will require Developer ID signing and notarization for normal Gatekeeper acceptance.
