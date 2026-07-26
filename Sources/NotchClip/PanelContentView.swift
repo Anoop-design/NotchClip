@@ -2,474 +2,724 @@ import AppKit
 import SwiftUI
 import NotchClipCore
 
-private enum QuickShelfLayout {
-    static let cardWidth: CGFloat = 100
-    static let cardHeight: CGFloat = 108
-    static let cardCornerRadius: CGFloat = 12
-    static let previewWidth: CGFloat = 86
-    static let previewHeight: CGFloat = 68
-    static let previewCornerRadius: CGFloat = 9
-    static let libraryWidth: CGFloat = 82
+enum PanelLayout {
+    static let headerHeight: CGFloat = 44
+    static let footerHeight: CGFloat = 34
+    static let listWidth: CGFloat = 300
+    static let rowHeight: CGFloat = 46
+    static let sectionHeaderHeight: CGFloat = 24
+    static let glyphSize: CGFloat = 28
+    static let horizontalPadding: CGFloat = 12
 }
 
+/// The single NotchClip surface: search, the complete filtered history, and a
+/// full-content preview of the selection — all inside the notch shell.
 struct PanelRootView: View {
     @Bindable var history: HistoryModel
     @Bindable var visualState: PanelVisualState
     var dragController: HistoryDragController
     var onSelect: () -> Void
-    var onOpenLibrary: () -> Void
     var onEscape: () -> Void
     var onBeginDrag: () -> Void
     var onEndDrag: () -> Void
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @FocusState private var searchFocused: Bool
 
-    private var shelf: [ClipboardEntry] { history.quickShelf }
     private var motionReduced: Bool { reduceMotion || visualState.reduceMotion }
+
+    private var selectedEntry: ClipboardEntry? {
+        guard let id = history.selectedID else { return history.projection.visibleEntries.first }
+        return history.projection.entry(id: id) ?? history.projection.visibleEntries.first
+    }
 
     var body: some View {
         VStack(spacing: 0) {
-            trayHeader
+            header
 
-            content
-                .frame(maxHeight: .infinity)
-                .padding(.top, 6)
-                .padding(.bottom, 4)
+            Divider().overlay(NotchClipDesign.hairline)
 
-            commandBar
+            if let storageError = history.storageError {
+                PanelEmptyState(
+                    title: "Storage unavailable",
+                    systemImage: "externaldrive.badge.exclamationmark",
+                    detail: storageError,
+                    tone: NotchClipDesign.warning
+                )
+            } else {
+                bodyContent
+            }
+
+            Divider().overlay(NotchClipDesign.hairline)
+
+            PanelFooter(
+                clipCount: history.projection.visibleEntries.count,
+                isFiltered: !history.query.isEmpty || history.scope != .all,
+                isPaused: history.isPaused,
+                captureError: history.captureError,
+                canPaste: selectedEntry != nil,
+                onDismissError: history.clearCaptureError,
+                onPaste: onSelect
+            )
         }
-        .padding(.horizontal, 14)
-        .padding(.top, max(8, visualState.capHeight + 8))
-        .padding(.bottom, 8)
+        // The cap sits over the physical notch, so content starts below it.
+        .padding(.top, max(6, visualState.capHeight + 4))
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         .background(Color.clear)
         .environment(\.colorScheme, .dark)
         .opacity(visualState.contentOpacity)
-        .offset(y: motionReduced ? 0 : CGFloat(1 - visualState.contentOpacity) * -4)
-        .animation(
-            motionReduced ? nil : .easeOut(duration: 0.14),
-            value: history.captureError
-        )
+        .offset(y: motionReduced ? 0 : CGFloat(1 - visualState.contentOpacity) * -6)
         .accessibilityElement(children: .contain)
-        .accessibilityLabel("NotchClip clipboard shelf")
+        .accessibilityLabel("NotchClip clipboard history")
+        .onChange(of: visualState.focusRequestID) { _, _ in
+            searchFocused = true
+        }
+        .onAppear { searchFocused = true }
     }
 
-    private var trayHeader: some View {
-        HStack(spacing: 7) {
-            Image(systemName: "rectangle.on.rectangle")
-                .font(.system(size: 12, weight: .medium))
-                .foregroundStyle(NotchClipDesign.secondaryText)
+    // MARK: - Header
+
+    private var header: some View {
+        HStack(spacing: 10) {
+            Image(systemName: "magnifyingglass")
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundStyle(NotchClipDesign.tertiaryText)
                 .accessibilityHidden(true)
 
-            Text("Clipboard")
-                .font(.system(size: 13.5, weight: .semibold))
+            TextField("Search clipboard history", text: $history.query)
+                .textFieldStyle(.plain)
+                .font(.system(size: 13.5))
                 .foregroundStyle(NotchClipDesign.primaryText)
+                .focused($searchFocused)
+                .accessibilityLabel("Search clipboard history")
 
-            Spacer(minLength: 12)
+            if !history.query.isEmpty {
+                Button {
+                    history.query = ""
+                    searchFocused = true
+                } label: {
+                    Image(systemName: "xmark.circle.fill")
+                        .font(.system(size: 12))
+                        .foregroundStyle(NotchClipDesign.tertiaryText)
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Clear search")
+            }
 
-            NotchClipKeycap("⌃V")
-                .accessibilityLabel("Control V shortcut")
-
-            TrayCloseButton(
-                reduceMotion: motionReduced,
-                action: onEscape
-            )
+            ScopePicker(scope: $history.scope, reduceMotion: motionReduced)
         }
-        .frame(height: 28)
+        .padding(.horizontal, PanelLayout.horizontalPadding)
+        .frame(height: PanelLayout.headerHeight)
+    }
+
+    // MARK: - Body
+
+    @ViewBuilder
+    private var bodyContent: some View {
+        if history.isEmpty {
+            emptyState
+        } else {
+            HStack(spacing: 0) {
+                clipList
+                    .frame(width: PanelLayout.listWidth)
+
+                Divider().overlay(NotchClipDesign.hairline)
+
+                ClipPreviewPane(
+                    entry: selectedEntry,
+                    preview: selectedEntry.flatMap { history.previewCache[$0.id] },
+                    fullText: selectedEntry.flatMap { history.fullTextCache[$0.id] }
+                )
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            }
+            .frame(maxHeight: .infinity)
+        }
     }
 
     @ViewBuilder
-    private var content: some View {
-        if let storageError = history.storageError {
-            emptyState(
-                title: "Storage unavailable",
-                systemImage: "externaldrive.badge.exclamationmark",
-                detail: storageError,
-                tone: NotchClipDesign.warning
-            )
-        } else if history.isEmpty {
-            emptyState(
+    private var emptyState: some View {
+        if history.hasNoHistory {
+            PanelEmptyState(
                 title: "Your clipboard is ready",
                 systemImage: "rectangle.on.rectangle",
-                detail: "Copy text, links, images, or files and they’ll appear here.",
+                detail: "Copy text, links, images, or files and they'll appear here.",
+                tone: NotchClipDesign.secondaryText
+            )
+        } else if !history.query.isEmpty {
+            PanelEmptyState(
+                title: "No results",
+                systemImage: "magnifyingglass",
+                detail: "Nothing matches “\(history.query)”.",
                 tone: NotchClipDesign.secondaryText
             )
         } else {
-            clipboardShelf
+            PanelEmptyState(
+                title: "No \(history.scope.title.lowercased()) clips",
+                systemImage: history.scope.systemImage,
+                detail: history.scope.emptyDescription,
+                tone: NotchClipDesign.secondaryText
+            )
         }
     }
 
-    private var clipboardShelf: some View {
-        HStack(spacing: 8) {
-            ScrollViewReader { proxy in
-                ScrollView(.horizontal) {
-                    LazyHStack(spacing: 7) {
-                        ForEach(shelf) { entry in
-                            QuickShelfCard(
-                                entry: entry,
-                                row: EntryRowModel(
-                                    entry: entry,
-                                    linkTitle: history.previewCache[entry.id]?.linkTitle
-                                        ?? history.linkPreviews?.results[entry.id]?.title
-                                ),
-                                preview: history.previewCache[entry.id],
-                                isSelected: !visualState.libraryTileSelected
-                                    && history.selectedID == entry.id,
-                                dragController: dragController,
-                                onActivate: {
-                                    visualState.libraryTileSelected = false
-                                    history.selectedID = entry.id
-                                    onSelect()
-                                },
-                                onPin: { history.togglePin(id: entry.id) },
-                                onAppear: { history.rowBecameVisible(entry) },
-                                onDisappear: { history.rowDidDisappear(entry.id) }
-                            )
-                            .id(entry.id)
+    private var clipList: some View {
+        ScrollViewReader { proxy in
+            ScrollView(.vertical) {
+                LazyVStack(spacing: 1, pinnedViews: [.sectionHeaders]) {
+                    ForEach(history.projection.sections) { section in
+                        Section {
+                            ForEach(section.entries) { entry in
+                                row(entry)
+                                    .id(entry.id)
+                            }
+                        } header: {
+                            SectionHeader(title: section.title)
                         }
                     }
-                    // Leave just enough room for the focus ring while exposing
-                    // part of the next card as a quiet horizontal-scroll cue.
-                    .padding(.horizontal, 3)
-                    .padding(.vertical, 4)
                 }
-                .scrollIndicators(.never)
-                .scrollBounceBehavior(.basedOnSize, axes: .horizontal)
-                .frame(maxWidth: .infinity)
-                .onChange(of: history.selectedID) { _, selectedID in
-                    guard let selectedID,
-                          shelf.contains(where: { $0.id == selectedID }) else { return }
-                    withAnimation(motionReduced ? nil : .easeOut(duration: 0.20)) {
-                        proxy.scrollTo(selectedID, anchor: .center)
-                    }
+                .padding(.horizontal, 6)
+                .padding(.vertical, 5)
+            }
+            .scrollIndicators(.automatic)
+            .onChange(of: history.selectedID) { _, id in
+                guard let id, history.projection.contains(id: id) else { return }
+                withAnimation(motionReduced ? nil : .easeOut(duration: 0.16)) {
+                    proxy.scrollTo(id, anchor: .center)
                 }
             }
-            .layoutPriority(1)
-
-            Rectangle()
-                .fill(NotchClipDesign.hairline)
-                .frame(width: 1, height: 74)
-                .accessibilityHidden(true)
-
-            AllClipsTile(
-                isSelected: visualState.libraryTileSelected,
-                reduceMotion: motionReduced,
-                action: onOpenLibrary
-            )
         }
-        .frame(height: 116)
+        .frame(maxHeight: .infinity)
+        .accessibilityLabel("Clipboard items")
     }
 
-    private func emptyState(
-        title: String,
-        systemImage: String,
-        detail: String,
-        tone: Color
-    ) -> some View {
-        HStack(spacing: 13) {
-            Image(systemName: systemImage)
-                .font(.system(size: 23, weight: .medium))
-                .foregroundStyle(tone)
-                .frame(width: 30)
-                .accessibilityHidden(true)
-
-            VStack(alignment: .leading, spacing: 4) {
-                Text(title)
-                    .font(.system(size: 14, weight: .semibold))
-                    .foregroundStyle(NotchClipDesign.primaryText)
-
-                Text(detail)
-                    .font(.system(size: 11.5, weight: .regular))
-                    .foregroundStyle(NotchClipDesign.secondaryText)
-                    .lineLimit(2)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-
-            Spacer(minLength: 8)
-        }
-        .padding(.horizontal, 12)
-        .frame(maxWidth: .infinity, minHeight: 108, alignment: .leading)
-        .accessibilityElement(children: .combine)
-    }
-
-    @ViewBuilder
-    private var commandBar: some View {
-        if let captureError = history.captureError {
-            CaptureErrorBar(
-                message: captureError,
-                onDismiss: history.clearCaptureError
-            )
-            .transition(.opacity)
-        } else {
-            HStack(spacing: 10) {
-                if history.isPaused {
-                    Label("Capture paused", systemImage: "pause.fill")
-                        .font(.system(size: 11, weight: .medium))
-                        .foregroundStyle(NotchClipDesign.warning.opacity(0.86))
-                }
-
-                Spacer(minLength: 8)
-
-                TrayCommandHint(key: "← →", label: "Move")
-                TrayCommandHint(key: "↵", label: "Paste")
-                TrayCommandHint(key: "⌘F", label: "All Clips")
-            }
-            .frame(height: 22)
-            .accessibilityElement(children: .combine)
-            .accessibilityLabel(
-                "Use left and right arrows to move, Return to paste, or Command F for all clips"
-            )
-        }
+    private func row(_ entry: ClipboardEntry) -> some View {
+        let preview = history.previewCache[entry.id]
+        let model = EntryRowModel(
+            entry: entry,
+            linkTitle: preview?.linkTitle ?? history.linkPreviews?.results[entry.id]?.title
+        )
+        return ClipRow(
+            entry: entry,
+            row: model,
+            preview: preview,
+            isSelected: history.selectedID == entry.id,
+            dragController: dragController,
+            reduceMotion: motionReduced,
+            onSelect: {
+                history.selectedID = entry.id
+                history.requestFullTextForSelection()
+            },
+            onPaste: {
+                history.selectedID = entry.id
+                onSelect()
+            },
+            onPin: { history.togglePin(id: entry.id) },
+            onDelete: { history.delete(id: entry.id) },
+            onAppear: { history.rowBecameVisible(entry) },
+            onDisappear: { history.rowDidDisappear(entry.id) }
+        )
     }
 }
 
-private struct QuickShelfCard: View {
+// MARK: - Scope picker
+
+private struct ScopePicker: View {
+    @Binding var scope: ClipScope
+    let reduceMotion: Bool
+
+    var body: some View {
+        Menu {
+            ForEach(ClipScope.allCases) { option in
+                Button {
+                    scope = option
+                } label: {
+                    Label(option.title, systemImage: option.systemImage)
+                }
+                .keyboardShortcut(
+                    KeyEquivalent(Character("\(option.shortcutNumber)")),
+                    modifiers: [.command]
+                )
+            }
+        } label: {
+            HStack(spacing: 4) {
+                Image(systemName: scope.systemImage)
+                    .font(.system(size: 10, weight: .semibold))
+                Text(scope.title)
+                    .font(.system(size: 11.5, weight: .medium))
+                Image(systemName: "chevron.down")
+                    .font(.system(size: 8, weight: .bold))
+            }
+            .foregroundStyle(NotchClipDesign.secondaryText)
+            .padding(.horizontal, 9)
+            .frame(height: 24)
+            .background(
+                RoundedRectangle(cornerRadius: 7, style: .continuous)
+                    .fill(NotchClipDesign.surfaceStrong)
+            )
+            .overlay {
+                RoundedRectangle(cornerRadius: 7, style: .continuous)
+                    .strokeBorder(NotchClipDesign.border, lineWidth: 1)
+            }
+        }
+        .menuStyle(.borderlessButton)
+        .menuIndicator(.hidden)
+        .fixedSize()
+        .accessibilityLabel("Filter: \(scope.title)")
+        .help("Filter clips (⌘1–⌘6)")
+    }
+}
+
+// MARK: - Section header
+
+private struct SectionHeader: View {
+    let title: String
+
+    var body: some View {
+        HStack {
+            Text(title.uppercased())
+                .font(.system(size: 10, weight: .semibold))
+                .tracking(0.6)
+                .foregroundStyle(NotchClipDesign.tertiaryText)
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, 8)
+        .frame(height: PanelLayout.sectionHeaderHeight, alignment: .leading)
+        .background(NotchClipDesign.shellTint.opacity(0.92))
+        .accessibilityAddTraits(.isHeader)
+    }
+}
+
+// MARK: - Row
+
+private struct ClipRow: View {
     let entry: ClipboardEntry
     let row: EntryRowModel
     let preview: EntryPreview?
     let isSelected: Bool
     var dragController: HistoryDragController
-    var onActivate: () -> Void
+    let reduceMotion: Bool
+    var onSelect: () -> Void
+    var onPaste: () -> Void
     var onPin: () -> Void
+    var onDelete: () -> Void
     var onAppear: () -> Void
     var onDisappear: () -> Void
 
     @State private var isHovering = false
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
-
-    private var canDrag: Bool {
-        !row.hasMissingFiles && entry.payloadRefs.contains { !$0.relativePath.isEmpty }
-    }
 
     private var previewImage: NSImage? {
         preview?.thumbnail ?? preview?.fileIcon
     }
 
-    private var isTextual: Bool {
-        [.plainText, .rtf, .html].contains(row.kind)
+    private var canDrag: Bool {
+        !row.hasMissingFiles && entry.payloadRefs.contains { !$0.relativePath.isEmpty }
     }
 
     var body: some View {
-        ZStack(alignment: .top) {
-            Button(action: onActivate) {
-                VStack(alignment: .leading, spacing: 6) {
-                    previewSurface
-                    metadataRow
+        HStack(spacing: 9) {
+            glyph
+
+            VStack(alignment: .leading, spacing: 1) {
+                Text(row.primaryText)
+                    .font(.system(size: 12.5, weight: .medium))
+                    .foregroundStyle(NotchClipDesign.primaryText)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+
+                if let secondary = row.secondaryText {
+                    Text(secondary)
+                        .font(.system(size: 10.5))
+                        .foregroundStyle(NotchClipDesign.tertiaryText)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
                 }
-                .padding(7)
-                .frame(
-                    width: QuickShelfLayout.cardWidth,
-                    height: QuickShelfLayout.cardHeight,
-                    alignment: .topLeading
-                )
-                .contentShape(
-                    RoundedRectangle(
-                        cornerRadius: QuickShelfLayout.cardCornerRadius,
-                        style: .continuous
-                    )
-                )
             }
-            .buttonStyle(
-                TrayTileButtonStyle(
-                    isSelected: isSelected,
-                    isHovering: isHovering,
-                    reduceMotion: reduceMotion
-                )
-            )
-            .accessibilityLabel(accessibilitySummary)
-            .accessibilityHint("Pastes this item into the previous app")
-            .accessibilityAddTraits(isSelected ? [.isSelected, .isButton] : .isButton)
 
-            // The AppKit drag bridge stays outside the SwiftUI Button so its
-            // mouse-drag threshold continues to win over button activation.
-            if canDrag {
-                VStack(spacing: 0) {
-                    DragHandleView(
-                        entry: entry,
-                        previewImage: previewImage,
-                        controller: dragController,
-                        onActivate: onActivate,
-                        isEnabled: true
-                    )
-                    .frame(
-                        width: QuickShelfLayout.previewWidth,
-                        height: QuickShelfLayout.previewHeight
-                    )
-                    .clipShape(
-                        RoundedRectangle(
-                            cornerRadius: QuickShelfLayout.previewCornerRadius,
-                            style: .continuous
-                        )
-                    )
-                    .accessibilityLabel("Drag or paste \(row.primaryText)")
-                    .accessibilityHint("Click to paste, or drag into another app")
-                    .help("Click to paste or drag into another app")
+            Spacer(minLength: 4)
 
-                    Spacer(minLength: 0)
-                }
-                .padding(.top, 7)
-                .frame(
-                    width: QuickShelfLayout.cardWidth,
-                    height: QuickShelfLayout.cardHeight
-                )
+            if row.isPinned {
+                Image(systemName: "pin.fill")
+                    .font(.system(size: 9, weight: .semibold))
+                    .foregroundStyle(NotchClipDesign.secondaryText)
+                    .accessibilityLabel("Pinned")
+            }
+            if row.hasMissingFiles {
+                Image(systemName: "exclamationmark.triangle.fill")
+                    .font(.system(size: 9, weight: .semibold))
+                    .foregroundStyle(NotchClipDesign.warning)
+                    .accessibilityLabel("Missing file")
             }
         }
-        .frame(
-            width: QuickShelfLayout.cardWidth,
-            height: QuickShelfLayout.cardHeight
-        )
+        .padding(.horizontal, 8)
+        .frame(height: PanelLayout.rowHeight)
+        .contentShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+        .background {
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .fill(background)
+        }
+        .overlay(alignment: .leading) {
+            // A keyboard-driven picker needs its selection readable at a glance,
+            // so selection gets the accent colour plus a leading marker rather
+            // than the barely-there white wash used for hover.
+            if isSelected {
+                RoundedRectangle(cornerRadius: 2, style: .continuous)
+                    .fill(Color.accentColor)
+                    .frame(width: 3, height: PanelLayout.rowHeight - 16)
+                    .padding(.leading, 2)
+                    .accessibilityHidden(true)
+            }
+        }
+        .overlay {
+            if isSelected {
+                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    .strokeBorder(Color.accentColor.opacity(0.55), lineWidth: 1)
+            }
+        }
+        .animation(reduceMotion ? nil : .easeOut(duration: 0.10), value: isSelected)
+        .animation(reduceMotion ? nil : .easeOut(duration: 0.10), value: isHovering)
         .onHover { isHovering = $0 }
+        .onTapGesture(count: 2, perform: onPaste)
+        .onTapGesture(perform: onSelect)
         .onAppear(perform: onAppear)
         .onDisappear(perform: onDisappear)
         .contextMenu {
-            Button(entry.isPinned ? "Unpin" : "Pin", action: onPin)
-            Button("Paste into Previous App", action: onActivate)
+            Button("Paste into Previous App", systemImage: "arrow.turn.down.left", action: onPaste)
+            Button(row.isPinned ? "Unpin" : "Pin", systemImage: row.isPinned ? "pin.slash" : "pin", action: onPin)
+            Divider()
+            Button("Delete", systemImage: "trash", role: .destructive, action: onDelete)
         }
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(accessibilitySummary)
-        .accessibilityHint("Press to paste this item into the previous app")
+        .accessibilityHint("Press Return to paste this item into the previous app")
         .accessibilityAddTraits(isSelected ? [.isSelected, .isButton] : .isButton)
-        .accessibilityAction(named: "Paste") { onActivate() }
-        .accessibilityAction(named: entry.isPinned ? "Unpin" : "Pin") { onPin() }
+        .accessibilityAction(named: "Paste", onPaste)
+        .accessibilityAction(named: row.isPinned ? "Unpin" : "Pin", onPin)
+        .accessibilityAction(named: "Delete", onDelete)
     }
 
-    private var previewSurface: some View {
+    private var glyph: some View {
         ZStack {
-            RoundedRectangle(
-                cornerRadius: QuickShelfLayout.previewCornerRadius,
-                style: .continuous
-            )
-            .fill(NotchClipDesign.surfaceStrong.opacity(0.68))
+            RoundedRectangle(cornerRadius: 7, style: .continuous)
+                .fill(NotchClipDesign.surfaceStrong)
 
-            previewContent
+            if let previewImage {
+                Image(nsImage: previewImage)
+                    .resizable()
+                    .aspectRatio(contentMode: entry.primaryKind == .fileList ? .fit : .fill)
+                    .padding(entry.primaryKind == .fileList ? 4 : 0)
+                    .accessibilityHidden(true)
+            } else {
+                Image(systemName: kindSymbol)
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundStyle(NotchClipDesign.secondaryText)
+                    .accessibilityHidden(true)
+            }
+
+            // AppKit drag bridge sits above the artwork so its movement
+            // threshold wins over the row's tap gestures.
+            if canDrag {
+                DragHandleView(
+                    entry: entry,
+                    previewImage: previewImage,
+                    controller: dragController,
+                    onActivate: onSelect,
+                    onDoubleActivate: onPaste
+                )
+                .accessibilityHidden(true)
+            }
         }
-        .frame(
-            width: QuickShelfLayout.previewWidth,
-            height: QuickShelfLayout.previewHeight
-        )
-        .clipShape(
-            RoundedRectangle(
-                cornerRadius: QuickShelfLayout.previewCornerRadius,
-                style: .continuous
-            )
-        )
+        .frame(width: PanelLayout.glyphSize, height: PanelLayout.glyphSize)
+        .clipShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
         .overlay {
-            RoundedRectangle(
-                cornerRadius: QuickShelfLayout.previewCornerRadius,
-                style: .continuous
-            )
+            RoundedRectangle(cornerRadius: 7, style: .continuous)
                 .strokeBorder(NotchClipDesign.hairline, lineWidth: 0.5)
         }
-        .overlay(alignment: .topTrailing) {
-            statusGlyph
-                .padding(6)
-                .allowsHitTesting(false)
-        }
+        .help(canDrag ? "Drag into another app" : row.kindLabel)
     }
 
-    @ViewBuilder
-    private var previewContent: some View {
-        if let thumbnail = preview?.thumbnail {
-            Image(nsImage: thumbnail)
-                .resizable()
-                .scaledToFill()
-                .frame(
-                    width: QuickShelfLayout.previewWidth,
-                    height: QuickShelfLayout.previewHeight
-                )
-                .clipped()
-                .allowsHitTesting(false)
-        } else if let fileIcon = preview?.fileIcon {
-            Image(nsImage: fileIcon)
-                .resizable()
-                .scaledToFit()
-                .padding(14)
-                .allowsHitTesting(false)
-        } else if isTextual {
-            Text(row.primaryText)
-                .font(.system(size: 11, weight: .regular))
-                .foregroundStyle(NotchClipDesign.primaryText.opacity(0.82))
-                .lineLimit(3)
-                .multilineTextAlignment(.leading)
-                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-                .padding(9)
-                .allowsHitTesting(false)
-        } else if row.kind == .url {
-            VStack(alignment: .leading, spacing: 6) {
-                Image(systemName: "link")
-                    .font(.system(size: 12, weight: .semibold))
-                    .foregroundStyle(NotchClipDesign.secondaryText)
+    private var background: Color {
+        if isSelected { return Color.accentColor.opacity(0.22) }
+        if isHovering { return NotchClipDesign.surfaceHover }
+        return .clear
+    }
 
-                Text(row.primaryText)
-                    .font(.system(size: 11, weight: .medium))
-                    .foregroundStyle(NotchClipDesign.primaryText.opacity(0.82))
-                    .lineLimit(2)
-                    .multilineTextAlignment(.leading)
-            }
-            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-            .padding(9)
-            .allowsHitTesting(false)
+    private var kindSymbol: String { NotchClipSymbols.symbol(for: row.kind) }
+
+    private var accessibilitySummary: String {
+        var parts = [row.primaryText, row.kindLabel]
+        if row.isPinned { parts.append("Pinned") }
+        if row.hasMissingFiles { parts.append("Missing file") }
+        if let secondary = row.secondaryText { parts.append(secondary) }
+        return parts.joined(separator: ", ")
+    }
+}
+
+// MARK: - Preview pane
+
+private struct ClipPreviewPane: View {
+    let entry: ClipboardEntry?
+    let preview: EntryPreview?
+    let fullText: String?
+
+    var body: some View {
+        if let entry {
+            content(for: entry)
         } else {
-            Image(systemName: kindSymbol)
-                .font(.system(size: 22, weight: .medium))
-                .foregroundStyle(NotchClipDesign.secondaryText)
-                .allowsHitTesting(false)
+            VStack(spacing: 8) {
+                Image(systemName: "rectangle.on.rectangle.angled")
+                    .font(.system(size: 22))
+                    .foregroundStyle(NotchClipDesign.tertiaryText)
+                Text("Select a clip to preview it")
+                    .font(.system(size: 12))
+                    .foregroundStyle(NotchClipDesign.tertiaryText)
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .accessibilityElement(children: .combine)
         }
     }
 
-    private var metadataRow: some View {
-        HStack(spacing: 5) {
-            Image(systemName: kindSymbol)
-                .font(.system(size: 8.5, weight: .semibold))
-                .foregroundStyle(NotchClipDesign.tertiaryText)
-                .accessibilityHidden(true)
+    private func content(for entry: ClipboardEntry) -> some View {
+        let row = EntryRowModel(entry: entry, linkTitle: preview?.linkTitle)
+        return VStack(alignment: .leading, spacing: 0) {
+            header(for: entry, row: row)
 
-            Text(metadataText)
-                .font(.system(size: 10.5, weight: .medium))
-                .foregroundStyle(NotchClipDesign.secondaryText)
-                .lineLimit(1)
-                .truncationMode(.middle)
+            ScrollView(.vertical) {
+                VStack(alignment: .leading, spacing: 14) {
+                    body(for: entry, row: row)
+                }
+                .frame(maxWidth: .infinity, alignment: .topLeading)
+                .padding(.horizontal, 14)
+                .padding(.bottom, 14)
+            }
+            .scrollIndicators(.automatic)
 
-            Spacer(minLength: 0)
+            footer(for: entry)
         }
-        .frame(height: 14)
-        .padding(.horizontal, 1)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("Preview of selected clip")
+    }
+
+    private func header(for entry: ClipboardEntry, row: EntryRowModel) -> some View {
+        HStack(spacing: 7) {
+            Image(systemName: NotchClipSymbols.symbol(for: row.kind))
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(NotchClipDesign.secondaryText)
+            Text(row.kindLabel)
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundStyle(NotchClipDesign.primaryText)
+
+            Spacer(minLength: 8)
+
+            Text(EntryPresentation.sourceLabel(from: entry.source) ?? "Unknown")
+                .font(.system(size: 10.5))
+                .foregroundStyle(NotchClipDesign.tertiaryText)
+                .lineLimit(1)
+        }
+        .padding(.horizontal, 14)
+        .frame(height: 34)
+        .accessibilityElement(children: .combine)
     }
 
     @ViewBuilder
-    private var statusGlyph: some View {
-        if row.hasMissingFiles {
-            Image(systemName: "exclamationmark.triangle.fill")
-                .font(.system(size: 9, weight: .bold))
-                .foregroundStyle(NotchClipDesign.warning)
-                .shadow(color: .black.opacity(0.8), radius: 2, y: 1)
-                .accessibilityLabel("Missing file")
-        } else if row.isPinned {
-            Image(systemName: "pin.fill")
-                .font(.system(size: 9, weight: .semibold))
-                .foregroundStyle(NotchClipDesign.primaryText.opacity(0.78))
-                .shadow(color: .black.opacity(0.8), radius: 2, y: 1)
-                .accessibilityLabel("Pinned")
-        } else if isHovering && canDrag {
-            Image(systemName: "arrow.up.forward")
-                .font(.system(size: 9, weight: .semibold))
-                .foregroundStyle(NotchClipDesign.primaryText.opacity(0.66))
-                .shadow(color: .black.opacity(0.8), radius: 2, y: 1)
+    private func body(for entry: ClipboardEntry, row: EntryRowModel) -> some View {
+        switch entry.primaryKind {
+        case .image:
+            if let image = preview?.thumbnail {
+                Image(nsImage: image)
+                    .resizable()
+                    .scaledToFit()
+                    .frame(maxWidth: .infinity, maxHeight: 260)
+                    .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+                    .accessibilityLabel("Image preview")
+            } else {
+                placeholder(systemImage: "photo", title: "Image")
+            }
+
+        case .fileList:
+            VStack(alignment: .leading, spacing: 7) {
+                ForEach(Array(row.originalPaths.prefix(12).enumerated()), id: \.offset) { _, path in
+                    HStack(spacing: 7) {
+                        Image(systemName: "doc")
+                            .font(.system(size: 10))
+                            .foregroundStyle(NotchClipDesign.tertiaryText)
+                        Text(path)
+                            .font(.system(size: 11))
+                            .foregroundStyle(NotchClipDesign.secondaryText)
+                            .lineLimit(2)
+                            .truncationMode(.middle)
+                            .textSelection(.enabled)
+                    }
+                }
+                if row.originalPaths.count > 12 {
+                    Text("\(row.originalPaths.count - 12) more files")
+                        .font(.system(size: 11, weight: .medium))
+                        .foregroundStyle(NotchClipDesign.tertiaryText)
+                }
+                if row.hasMissingFiles {
+                    Label("One or more original files are missing", systemImage: "exclamationmark.triangle.fill")
+                        .font(.system(size: 11, weight: .medium))
+                        .foregroundStyle(NotchClipDesign.warning)
+                }
+            }
+
+        default:
+            if let image = preview?.thumbnail, entry.primaryKind == .url {
+                Image(nsImage: image)
+                    .resizable()
+                    .scaledToFill()
+                    .frame(maxWidth: .infinity, maxHeight: 130)
+                    .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+                    .accessibilityLabel("Link preview image")
+            }
+            // The complete retained text, with real line breaks. `previewText`
+            // is collapsed and capped at 200 characters, so it is only a
+            // fallback for the brief moment before the payload load lands.
+            Text(fullText ?? entry.previewText)
+                .font(.system(size: 12, design: textDesign(for: entry)))
+                .foregroundStyle(NotchClipDesign.primaryText.opacity(0.92))
+                .lineSpacing(2.5)
+                .textSelection(.enabled)
+                .frame(maxWidth: .infinity, alignment: .topLeading)
+                .accessibilityLabel("Clip contents")
+        }
+    }
+
+    private func footer(for entry: ClipboardEntry) -> some View {
+        let bytes = entry.payloadRefs.reduce(0) { $0 + $1.byteCount }
+        return HStack(spacing: 10) {
+            Text(entry.updatedAt.formatted(date: .abbreviated, time: .shortened))
+            Spacer(minLength: 8)
+            Text(EntryPresentation.byteCountString(bytes))
+        }
+        .font(.system(size: 10.5))
+        .foregroundStyle(NotchClipDesign.tertiaryText)
+        .padding(.horizontal, 14)
+        .frame(height: 26)
+        .accessibilityElement(children: .combine)
+    }
+
+    /// Monospace anything that reads like code or markup so structure survives.
+    private func textDesign(for entry: ClipboardEntry) -> Font.Design {
+        entry.primaryKind == .html ? .monospaced : .default
+    }
+
+    private func placeholder(systemImage: String, title: String) -> some View {
+        VStack(spacing: 8) {
+            Image(systemName: systemImage)
+                .font(.system(size: 22))
+            Text(title)
+                .font(.system(size: 12, weight: .medium))
+        }
+        .foregroundStyle(NotchClipDesign.tertiaryText)
+        .frame(maxWidth: .infinity, minHeight: 120)
+        .accessibilityElement(children: .combine)
+    }
+}
+
+// MARK: - Footer
+
+private struct PanelFooter: View {
+    let clipCount: Int
+    let isFiltered: Bool
+    let isPaused: Bool
+    let captureError: String?
+    let canPaste: Bool
+    let onDismissError: () -> Void
+    let onPaste: () -> Void
+
+    var body: some View {
+        HStack(spacing: 10) {
+            if let captureError {
+                Image(systemName: "exclamationmark.triangle.fill")
+                    .font(.system(size: 9.5, weight: .semibold))
+                    .foregroundStyle(NotchClipDesign.warning)
+                    .accessibilityHidden(true)
+                Text(captureError)
+                    .font(.system(size: 11))
+                    .foregroundStyle(NotchClipDesign.secondaryText)
+                    .lineLimit(1)
+                    .help(captureError)
+                Button("Dismiss", action: onDismissError)
+                    .buttonStyle(.plain)
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundStyle(NotchClipDesign.secondaryText)
+            } else if isPaused {
+                Label("Capture paused", systemImage: "pause.fill")
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundStyle(NotchClipDesign.warning.opacity(0.86))
+            } else {
+                Text(countLabel)
+                    .font(.system(size: 11))
+                    .foregroundStyle(NotchClipDesign.tertiaryText)
+            }
+
+            Spacer(minLength: 8)
+
+            PanelHint(key: "↑↓", label: "Move")
+            PanelHint(key: "↵", label: "Paste")
+            PanelHint(key: "⌘1–6", label: "Filter")
+        }
+        .padding(.horizontal, PanelLayout.horizontalPadding)
+        .frame(height: PanelLayout.footerHeight)
+        .accessibilityElement(children: .contain)
+    }
+
+    private var countLabel: String {
+        let noun = clipCount == 1 ? "clip" : "clips"
+        return isFiltered ? "\(clipCount) \(noun) shown" : "\(clipCount) \(noun)"
+    }
+}
+
+private struct PanelHint: View {
+    let key: String
+    let label: String
+
+    var body: some View {
+        HStack(spacing: 4) {
+            NotchClipKeycap(key)
+            Text(label)
+                .font(.system(size: 10.5, weight: .medium))
+                .foregroundStyle(NotchClipDesign.tertiaryText)
+        }
+        .fixedSize()
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("\(key), \(label)")
+    }
+}
+
+// MARK: - Shared bits
+
+private struct PanelEmptyState: View {
+    let title: String
+    let systemImage: String
+    let detail: String
+    let tone: Color
+
+    var body: some View {
+        VStack(spacing: 9) {
+            Image(systemName: systemImage)
+                .font(.system(size: 26, weight: .medium))
+                .foregroundStyle(tone)
                 .accessibilityHidden(true)
-                .transition(.opacity)
+            Text(title)
+                .font(.system(size: 14, weight: .semibold))
+                .foregroundStyle(NotchClipDesign.primaryText)
+            Text(detail)
+                .font(.system(size: 11.5))
+                .foregroundStyle(NotchClipDesign.secondaryText)
+                .multilineTextAlignment(.center)
+                .fixedSize(horizontal: false, vertical: true)
+                .frame(maxWidth: 340)
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .accessibilityElement(children: .combine)
     }
+}
 
-    private var metadataText: String {
-        if isTextual { return row.kindLabel }
-        if row.kind == .url, preview?.thumbnail == nil {
-            return row.secondaryText ?? row.kindLabel
-        }
-        return row.primaryText
-    }
-
-    private var kindSymbol: String {
-        switch row.kind {
+enum NotchClipSymbols {
+    static func symbol(for kind: ClipboardContentKind) -> String {
+        switch kind {
         case .plainText: return "text.alignleft"
         case .rtf: return "textformat"
         case .html: return "chevron.left.forwardslash.chevron.right"
@@ -479,213 +729,5 @@ private struct QuickShelfCard: View {
         case .mixed: return "square.stack.3d.up"
         case .other: return "clipboard"
         }
-    }
-
-    private var accessibilitySummary: String {
-        var parts = [row.primaryText, row.kindLabel]
-        if row.isPinned { parts.append("Pinned") }
-        if row.hasMissingFiles { parts.append("Missing file") }
-        return parts.joined(separator: ", ")
-    }
-}
-
-private struct AllClipsTile: View {
-    let isSelected: Bool
-    let reduceMotion: Bool
-    let action: () -> Void
-
-    @State private var isHovering = false
-
-    var body: some View {
-        Button(action: action) {
-            VStack(alignment: .leading, spacing: 0) {
-                HStack(alignment: .center) {
-                    Image(systemName: "square.stack.3d.up")
-                        .font(.system(size: 16, weight: .medium))
-                        .foregroundStyle(NotchClipDesign.secondaryText)
-
-                    Spacer(minLength: 0)
-
-                    Image(systemName: "arrow.up.right")
-                        .font(.system(size: 9, weight: .semibold))
-                        .foregroundStyle(NotchClipDesign.tertiaryText)
-                        .offset(x: isHovering && !reduceMotion ? 1 : 0, y: isHovering && !reduceMotion ? -1 : 0)
-                }
-
-                Spacer(minLength: 8)
-
-                Text("All Clips")
-                    .font(.system(size: 12.5, weight: .semibold))
-                    .foregroundStyle(NotchClipDesign.primaryText)
-                    .lineLimit(1)
-
-                Text("Browse")
-                    .font(.system(size: 10.5, weight: .regular))
-                    .foregroundStyle(NotchClipDesign.tertiaryText)
-                    .lineLimit(1)
-            }
-            .padding(9)
-            .frame(
-                width: QuickShelfLayout.libraryWidth,
-                height: QuickShelfLayout.cardHeight,
-                alignment: .topLeading
-            )
-            .contentShape(
-                RoundedRectangle(
-                    cornerRadius: QuickShelfLayout.cardCornerRadius,
-                    style: .continuous
-                )
-            )
-        }
-        .buttonStyle(
-            TrayTileButtonStyle(
-                isSelected: isSelected,
-                isHovering: isHovering,
-                reduceMotion: reduceMotion
-            )
-        )
-        .onHover { isHovering = $0 }
-        .animation(reduceMotion ? nil : .easeOut(duration: 0.10), value: isHovering)
-        .keyboardShortcut("f", modifiers: [.command])
-        .accessibilityLabel("Open all clipboard history")
-        .accessibilityHint("Opens the searchable clipboard library")
-        .accessibilityAddTraits(isSelected ? .isSelected : [])
-        .help("Search All Clips (Command-F)")
-    }
-}
-
-private struct TrayTileButtonStyle: ButtonStyle {
-    let isSelected: Bool
-    let isHovering: Bool
-    let reduceMotion: Bool
-
-    func makeBody(configuration: Configuration) -> some View {
-        let shape = RoundedRectangle(
-            cornerRadius: QuickShelfLayout.cardCornerRadius,
-            style: .continuous
-        )
-        configuration.label
-            .background(shape.fill(surfaceColor(isPressed: configuration.isPressed)))
-            .overlay {
-                shape.strokeBorder(borderColor, lineWidth: isSelected ? 1 : 0.5)
-            }
-            .scaleEffect(reduceMotion || !configuration.isPressed ? 1 : 0.985)
-            .animation(
-                reduceMotion ? nil : .spring(response: 0.18, dampingFraction: 0.90),
-                value: configuration.isPressed
-            )
-            .animation(
-                reduceMotion ? nil : .easeOut(duration: 0.10),
-                value: isHovering
-            )
-            .animation(
-                reduceMotion ? nil : .easeOut(duration: 0.14),
-                value: isSelected
-            )
-    }
-
-    private func surfaceColor(isPressed: Bool) -> Color {
-        if isPressed { return NotchClipDesign.surfacePressed }
-        if isSelected { return NotchClipDesign.surfaceSelected }
-        if isHovering { return NotchClipDesign.surfaceHover }
-        return NotchClipDesign.surface
-    }
-
-    private var borderColor: Color {
-        if isSelected { return NotchClipDesign.borderSelected }
-        if isHovering { return NotchClipDesign.borderHover.opacity(0.72) }
-        return NotchClipDesign.border.opacity(0.30)
-    }
-}
-
-private struct TrayCloseButton: View {
-    let reduceMotion: Bool
-    let action: () -> Void
-
-    @State private var isHovering = false
-
-    var body: some View {
-        Button(action: action) {
-            Image(systemName: "xmark")
-                .font(.system(size: 10, weight: .semibold))
-                .foregroundStyle(NotchClipDesign.secondaryText)
-                .frame(width: 36, height: 28)
-                .background(
-                    RoundedRectangle(cornerRadius: 8, style: .continuous)
-                        .fill(isHovering ? NotchClipDesign.surfaceHover : Color.clear)
-                )
-                .contentShape(Rectangle())
-        }
-        .buttonStyle(TrayIconButtonStyle(reduceMotion: reduceMotion))
-        .onHover { isHovering = $0 }
-        .animation(reduceMotion ? nil : .easeOut(duration: 0.10), value: isHovering)
-        .keyboardShortcut(.cancelAction)
-        .accessibilityLabel("Close clipboard history")
-        .help("Close")
-    }
-}
-
-private struct TrayIconButtonStyle: ButtonStyle {
-    let reduceMotion: Bool
-
-    func makeBody(configuration: Configuration) -> some View {
-        configuration.label
-            .opacity(configuration.isPressed ? 0.68 : 1)
-            .scaleEffect(reduceMotion || !configuration.isPressed ? 1 : 0.92)
-            .animation(
-                reduceMotion ? nil : .spring(response: 0.18, dampingFraction: 0.86),
-                value: configuration.isPressed
-            )
-    }
-}
-
-private struct TrayCommandHint: View {
-    let key: String
-    let label: String
-
-    var body: some View {
-        HStack(spacing: 5) {
-            NotchClipKeycap(key)
-            Text(label)
-                .font(.system(size: 11, weight: .medium))
-                .foregroundStyle(NotchClipDesign.tertiaryText)
-        }
-        .fixedSize(horizontal: true, vertical: false)
-        .accessibilityElement(children: .combine)
-        .accessibilityLabel("\(key), \(label)")
-    }
-}
-
-private struct CaptureErrorBar: View {
-    let message: String
-    let onDismiss: () -> Void
-
-    var body: some View {
-        HStack(spacing: 7) {
-            Image(systemName: "exclamationmark.triangle.fill")
-                .font(.system(size: 9.5, weight: .semibold))
-                .foregroundStyle(NotchClipDesign.warning)
-                .accessibilityHidden(true)
-
-            Text(message)
-                .font(.system(size: 11, weight: .medium))
-                .foregroundStyle(NotchClipDesign.secondaryText)
-                .lineLimit(1)
-
-            Spacer(minLength: 6)
-
-            Button(action: onDismiss) {
-                Image(systemName: "xmark")
-                    .font(.system(size: 9, weight: .semibold))
-                    .foregroundStyle(NotchClipDesign.secondaryText)
-                    .frame(width: 36, height: 22)
-                    .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
-            .accessibilityLabel("Dismiss error")
-        }
-        .frame(height: 22)
-        .accessibilityElement(children: .contain)
-        .accessibilityLabel("Clipboard capture error: \(message)")
     }
 }

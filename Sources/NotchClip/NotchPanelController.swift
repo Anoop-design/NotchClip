@@ -40,9 +40,13 @@ private enum NotchShellTransition {
     var timingFunction: CAMediaTimingFunction {
         switch self {
         case .expand:
-            return CAMediaTimingFunction(controlPoints: 0.16, 1.0, 0.30, 1.0)
+            // Leaves the notch fast and decelerates long into the final size, so
+            // the shell reads as one piece of material stretching rather than a
+            // window being resized.
+            return CAMediaTimingFunction(controlPoints: 0.12, 0.92, 0.20, 1.0)
         case .collapse:
-            return CAMediaTimingFunction(controlPoints: 0.40, 0.0, 0.20, 1.0)
+            // Mirror image: hesitates briefly, then pulls back into the notch.
+            return CAMediaTimingFunction(controlPoints: 0.45, 0.0, 0.25, 1.0)
         }
     }
 }
@@ -211,10 +215,10 @@ final class NotchPanelController: NSObject, NSWindowDelegate {
 
         self.restoreApp = restoreApp
         // Gate link previews before any visible-row work / refresh side effects.
-        // Search belongs to the complete library now; never let a stale legacy
-        // query hide a quick-shelf selection.
+        // Each presentation starts from an unfiltered view so a stale query can
+        // never hide the clip the user just copied.
         history.query = ""
-        visualState.libraryTileSelected = false
+        history.scope = .all
         history.setPanelVisible(true)
         history.refresh()
 
@@ -267,10 +271,14 @@ final class NotchPanelController: NSObject, NSWindowDelegate {
                     self.phase = .expanded
                     self.finishKeyAndFocus()
                 }
-                DispatchQueue.main.asyncAfter(deadline: .now() + plan.openDuration * 0.48) { [weak self] in
+                // Hold the content back until the shell has most of its final
+                // area, then fade in over the remainder. Revealing a list while
+                // the shell is still narrow makes the text look like it is being
+                // squeezed out of the notch.
+                DispatchQueue.main.asyncAfter(deadline: .now() + plan.openDuration * 0.42) { [weak self] in
                     guard let self else { return }
                     guard TransitionTokenPolicy.shouldApplyOpenCompletion(token: token, openGeneration: self.openGeneration) else { return }
-                    self.animateContentIn(duration: plan.openDuration * 0.50, plan: plan)
+                    self.animateContentIn(duration: plan.openDuration * 0.58, plan: plan)
                 }
             } else {
                 panel.setFrame(expanded, display: true)
@@ -384,15 +392,11 @@ final class NotchPanelController: NSObject, NSWindowDelegate {
 
     private func handleSelectionCopy() {
         if isDragging { return }
-        if visualState.libraryTileSelected {
-            dismiss(reason: .openLibrary)
-            return
-        }
         // Repeated Return while an operation is active is ignored.
         if activeSelectionOperation != nil || history.isPasteInFlight { return }
         guard let selectedID = history.selectedID,
-              history.quickShelf.contains(where: { $0.id == selectedID }) else {
-            history.prepareQuickShelfSelection()
+              history.projection.contains(id: selectedID) else {
+            history.prepareSelection()
             return
         }
 
@@ -438,7 +442,7 @@ final class NotchPanelController: NSObject, NSWindowDelegate {
             return
         }
         guard let selectedID = history.selectedID,
-              let entry = history.quickShelf.first(where: { $0.id == selectedID }) else { return }
+              let entry = history.projection.entry(id: selectedID) else { return }
         let route = QuickLookPolicy.route(for: entry)
         switch route {
         case .unsupported(let message), .missingFiles(let message):
@@ -513,9 +517,6 @@ final class NotchPanelController: NSObject, NSWindowDelegate {
             dragController: dragController,
             onSelect: { [weak self] in
                 self?.handleSelectionCopy()
-            },
-            onOpenLibrary: { [weak self] in
-                self?.dismiss(reason: .openLibrary)
             },
             onEscape: { [weak self] in
                 guard let self else { return }
@@ -629,7 +630,7 @@ final class NotchPanelController: NSObject, NSWindowDelegate {
     private func animateContentIn(duration: TimeInterval, plan: AnimationPlan) {
         visualState.contentScale = 1
         let animation: Animation = plan.allowsGeometryAnimation
-            ? .easeOut(duration: min(0.16, duration))
+            ? .easeOut(duration: min(0.22, duration))
             : .easeOut(duration: duration)
         withAnimation(animation) {
             visualState.contentOpacity = 1
@@ -721,62 +722,104 @@ final class NotchPanelController: NSObject, NSWindowDelegate {
         keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
             guard let self else { return event }
             guard self.panel?.isKeyWindow == true else { return event }
-            // Command-F hands off to the full searchable library. Other
-            // command-like shortcuts remain available to AppKit/SwiftUI.
-            let flags = NotchKeyboardEventPolicy.userModifiers(
-                in: event.modifierFlags
-            )
-            if flags == .command,
-               event.charactersIgnoringModifiers?.lowercased() == "f" {
-                self.dismiss(reason: .openLibrary)
-                return nil
+            let flags = NotchKeyboardEventPolicy.userModifiers(in: event.modifierFlags)
+
+            if flags == .command {
+                return self.handleCommandKey(event)
             }
+            // Anything else with a real modifier belongs to AppKit/SwiftUI.
             if !flags.isEmpty && flags != .shift { return event }
 
             switch event.keyCode {
-            case 53: // Escape
+            case 53: // Escape — narrow the surface before closing it.
                 if self.isDragging { return nil }
                 if self.isQuickLookActive || self.quickLook.isActiveOrStaging {
                     self.quickLook.close()
                     self.isQuickLookActive = false
                     return nil
                 }
+                if !self.history.query.isEmpty {
+                    self.history.query = ""
+                    return nil
+                }
+                if self.history.scope != .all {
+                    self.history.scope = .all
+                    return nil
+                }
                 self.dismiss(reason: .escape)
                 return nil
-            case 123, 126: // Left / Up
+
+            case 126: // Up
                 if self.isDragging { return nil }
-                if self.visualState.libraryTileSelected {
-                    self.visualState.libraryTileSelected = false
-                    self.history.selectedID = self.history.quickShelf.last?.id
-                } else {
-                    self.history.selectPreviousOnQuickShelf()
-                }
+                self.history.selectPrevious()
                 return nil
-            case 124, 125: // Right / Down
+
+            case 125: // Down
                 if self.isDragging { return nil }
-                if !self.visualState.libraryTileSelected {
-                    let shelf = self.history.quickShelf
-                    if shelf.isEmpty || self.history.selectedID == shelf.last?.id {
-                        self.visualState.libraryTileSelected = true
-                    } else {
-                        self.history.selectNextOnQuickShelf()
-                    }
-                }
+                self.history.selectNext()
                 return nil
+
+            case 116: // Page Up
+                if self.isDragging { return nil }
+                self.history.selectByPage(-1)
+                return nil
+
+            case 121: // Page Down
+                if self.isDragging { return nil }
+                self.history.selectByPage(1)
+                return nil
+
+            case 115: // Home
+                if self.isDragging { return nil }
+                self.history.selectFirst()
+                return nil
+
+            case 119: // End
+                if self.isDragging { return nil }
+                self.history.selectLast()
+                return nil
+
             case 36, 76: // Return / keypad Enter
                 if self.isDragging { return nil }
                 self.handleSelectionCopy()
                 return nil
-            case 49: // Space — Quick Look when not typing into search
-                if self.isDragging { return nil }
-                if flags.contains(.shift) { return event }
-                if self.visualState.libraryTileSelected { return nil }
-                if !self.history.query.isEmpty { return event }
-                self.handleQuickLook()
-                return nil
+
             default:
+                // Everything else (including Space and all typing) goes to the
+                // search field, which holds focus for the whole presentation.
                 return event
             }
+        }
+    }
+
+    /// ⌘-shortcuts owned by the panel. Unhandled ones fall through to SwiftUI.
+    private func handleCommandKey(_ event: NSEvent) -> NSEvent? {
+        let character = event.charactersIgnoringModifiers?.lowercased()
+
+        // ⌘1–⌘6 select a content filter.
+        if let character, let digit = Int(character),
+           let scope = ClipScope.scope(forShortcutNumber: digit) {
+            history.scope = scope
+            return nil
+        }
+
+        switch character {
+        case "f":
+            // Search lives here now; ⌘F just returns focus to the field.
+            visualState.requestSearchFocus()
+            return nil
+        case "y":
+            // Quick Look the selection (⌘Y matches Finder).
+            handleQuickLook()
+            return nil
+        case "p":
+            if let id = history.selectedID { history.togglePin(id: id) }
+            return nil
+        case "delete", "\u{8}", "\u{7F}":
+            if let id = history.selectedID { history.delete(id: id) }
+            return nil
+        default:
+            return event
         }
     }
 

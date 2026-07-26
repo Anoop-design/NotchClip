@@ -62,12 +62,15 @@ public struct PanelShellLayout: Equatable, Sendable {
 public enum PanelGeometry {
     public static let compactDefaultWidth: CGFloat = 180
     public static let compactMinHeight: CGFloat = 28
-    public static let expandedDefaultWidth: CGFloat = 660
-    public static let expandedDefaultHeight: CGFloat = 236
-    public static let expandedMinWidth: CGFloat = 600
-    public static let expandedMaxWidth: CGFloat = 680
-    public static let expandedMinHeight: CGFloat = 232
-    public static let expandedMaxHeight: CGFloat = 248
+    // The panel holds the entire searchable history: search header, sectioned
+    // list, preview pane, and action footer. The previous 660x236 strip could
+    // only ever show a bounded shelf.
+    public static let expandedDefaultWidth: CGFloat = 780
+    public static let expandedDefaultHeight: CGFloat = 620
+    public static let expandedMinWidth: CGFloat = 680
+    public static let expandedMaxWidth: CGFloat = 880
+    public static let expandedMinHeight: CGFloat = 440
+    public static let expandedMaxHeight: CGFloat = 720
     public static let edgePadding: CGFloat = 8
     public static let shoulderRadius: CGFloat = 28
 

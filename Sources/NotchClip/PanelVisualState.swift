@@ -15,12 +15,11 @@ final class PanelVisualState {
     /// Cap width used by the notch mask (compact top band).
     var capWidth: CGFloat = PanelGeometry.compactDefaultWidth
     var capHeight: CGFloat = PanelGeometry.compactMinHeight
-    /// Incremented on every presentation after the panel becomes key — drives `@FocusState`.
+    /// Incremented on every presentation after the panel becomes key — drives the
+    /// `@FocusState` on the panel's search field.
     private(set) var focusRequestID: UInt64 = 0
     var reduceMotion: Bool = false
     var reduceTransparency: Bool = false
-    /// Keyboard focus can advance past the fourth clip to the All Clips tile.
-    var libraryTileSelected: Bool = false
 
     func requestSearchFocus() {
         focusRequestID &+= 1
@@ -30,7 +29,6 @@ final class PanelVisualState {
         shellProgress = 0
         contentOpacity = 0
         contentScale = 1
-        libraryTileSelected = false
     }
 
     func applyExpandedAppearance() {
@@ -43,6 +41,5 @@ final class PanelVisualState {
         contentOpacity = 0
         contentScale = 1
         shellProgress = 0
-        libraryTileSelected = false
     }
 }

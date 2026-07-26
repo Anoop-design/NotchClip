@@ -111,12 +111,24 @@ final class NotchChromeView: NSView {
     }
 
     private func applyMaterial() {
-        // The notch is intentionally opaque in both accessibility modes. Glass
-        // remains available to onboarding and the full library, but the island
-        // itself should read as one continuous piece of true black hardware.
-        effectView.isHidden = true
-        shellTint.layer?.backgroundColor = NSColor.black.cgColor
+        // The cap overlaps the physical camera housing and must stay true black
+        // so the shell reads as one continuous piece of hardware. The body is
+        // the app's content surface, so it uses real glass over a dark scrim —
+        // the panel now holds the whole history and would feel like a slab
+        // otherwise.
         capTint.layer?.backgroundColor = NSColor.black.cgColor
+
+        if preferOpaque {
+            // Reduce Transparency: no blur, a solid near-black surface.
+            effectView.isHidden = true
+            shellTint.layer?.backgroundColor = NSColor.black.withAlphaComponent(0.97).cgColor
+        } else {
+            effectView.isHidden = false
+            effectView.material = .underWindowBackground
+            // The scrim keeps text legible over bright wallpapers and windows
+            // while still letting the blur read as depth.
+            shellTint.layer?.backgroundColor = NSColor.black.withAlphaComponent(0.62).cgColor
+        }
     }
 
     private func shellCGPath(

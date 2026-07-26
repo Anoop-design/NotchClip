@@ -339,9 +339,14 @@ public enum AnimationPlanner {
                 preferOpaqueChrome: true
             )
         }
+        // The panel now grows to a full-height HUD rather than a thin strip, so
+        // the expansion is given slightly more time to read as one continuous
+        // movement. The collapse stays shorter than the open: dismissing should
+        // feel decisive, not like a rewind.
+        // Bounds are asserted by Phase2ATests.testFullMotionAllowsGeometry.
         return AnimationPlan(
-            openDuration: 0.31,
-            closeDuration: 0.23,
+            openDuration: 0.36,
+            closeDuration: 0.22,
             allowsGeometryAnimation: true,
             contentScaleEnabled: false,
             preferOpaqueChrome: reduceTransparency

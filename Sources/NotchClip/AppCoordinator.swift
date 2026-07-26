@@ -11,10 +11,8 @@ final class AppCoordinator: NSObject {
     private(set) var engine: ClipboardEngine?
     private(set) var monitor: ClipboardMonitor?
     private(set) var panelController: NotchPanelController?
-    private(set) var libraryController: ClipboardLibraryController?
     private(set) var hotKey: any HotKeyRegistering
     private let pasteDispatcher: PasteCommandDispatcher
-    private let libraryQuickLook = QuickLookController()
     private let accessibilityOnboarding: AccessibilityPermissionOnboardingController
     private(set) var storageError: String?
     private(set) var hotKeyError: String?
@@ -26,10 +24,6 @@ final class AppCoordinator: NSObject {
     /// App to restore for the active presentation; cleared after one restore attempt.
     private var presentationRestoreApp: NSRunningApplication?
     private var didRestoreForPresentation: Bool = false
-    /// App that was active before opening the durable history library.
-    private var libraryRestoreApp: NSRunningApplication?
-    private var isLibraryPasteInFlight = false
-    private var suppressLibraryDismissRestore = false
     private var permissionPasteErrorMessage: String?
     private var workspaceObserver: NSObjectProtocol?
 
@@ -67,26 +61,6 @@ final class AppCoordinator: NSObject {
             panelController?.attach(engine: engine)
         }
 
-        if libraryController == nil {
-            let library = ClipboardLibraryController(history: history)
-            library.attach(engine: engine)
-            library.onPaste = { [weak self] entry in
-                self?.handleLibraryPaste(entry)
-            }
-            library.onDismiss = { [weak self] in
-                self?.handleLibraryDismiss()
-            }
-            library.onQuickLook = { [weak self] entry in
-                self?.handleLibraryQuickLook(entry)
-            }
-            libraryQuickLook.onDidClose = { [weak library] in
-                library?.refocusAfterQuickLook()
-            }
-            libraryController = library
-        } else {
-            libraryController?.attach(engine: engine)
-        }
-
         DispatchQueue.main.async { [weak self] in
             guard let self else { return }
             let forceOnboarding = ProcessInfo.processInfo.arguments.contains(
@@ -102,8 +76,6 @@ final class AppCoordinator: NSObject {
         monitor?.stop()
         hotKey.unregister()
         panelController?.shutdown()
-        libraryController?.shutdown()
-        libraryQuickLook.shutdown()
         if let workspaceObserver {
             NSWorkspace.shared.notificationCenter.removeObserver(workspaceObserver)
         }
@@ -114,19 +86,6 @@ final class AppCoordinator: NSObject {
     func toggleClipboardPanel() {
         refreshAccessibilityStatus()
         rememberFrontmostIfNeeded()
-
-        // The global shortcut always means the fast shelf. Hand off cleanly
-        // from the durable library if it happens to be open.
-        if libraryController?.isVisible == true {
-            let target = libraryRestoreApp ?? lastExternalApp
-            suppressLibraryDismissRestore = true
-            libraryController?.close()
-            libraryRestoreApp = nil
-            presentationRestoreApp = target
-            didRestoreForPresentation = false
-            panelController?.show(restoreApp: target)
-            return
-        }
 
         let panel = panelController
         let action = PanelPhasePolicy.toggleAction(for: panel?.phase ?? .hidden)
@@ -149,25 +108,9 @@ final class AppCoordinator: NSObject {
         toggleClipboardPanel()
     }
 
+    /// Menu entry point. There is one surface now, so this simply presents it.
     func openClipboardLibrary() {
-        refreshAccessibilityStatus()
-        rememberFrontmostIfNeeded()
-        pasteDispatcher.cancelPending()
-
-        if libraryController?.isVisible == true {
-            libraryController?.present()
-            return
-        }
-
-        if let panel = panelController, panel.phase != .hidden {
-            // The panel's dismissal completion performs the handoff after the
-            // island has finished collapsing, avoiding overlapping windows.
-            panel.dismiss(reason: .openLibrary)
-            return
-        }
-
-        libraryRestoreApp = lastExternalApp
-        libraryController?.present()
+        showClipboardPanel()
     }
 
     func togglePause() {
@@ -287,15 +230,6 @@ final class AppCoordinator: NSObject {
     private func handlePanelDismiss(_ reason: DismissReason) {
         let target = presentationRestoreApp
 
-        if reason == .openLibrary {
-            refreshAccessibilityStatus()
-            libraryRestoreApp = target ?? lastExternalApp
-            presentationRestoreApp = nil
-            didRestoreForPresentation = false
-            libraryController?.present()
-            return
-        }
-
         let shouldRestore = DismissPolicy.shouldPerformRestore(
             reason: reason,
             alreadyRestored: didRestoreForPresentation
@@ -321,73 +255,6 @@ final class AppCoordinator: NSObject {
         if panelController?.phase == .hidden {
             presentationRestoreApp = nil
             didRestoreForPresentation = false
-        }
-    }
-
-    private func handleLibraryPaste(_ entry: ClipboardEntry) {
-        guard !isLibraryPasteInFlight else { return }
-        isLibraryPasteInFlight = true
-        let target = libraryRestoreApp
-
-        let started = history.paste(entryID: entry.id) { [weak self] written, error in
-            guard let self else { return }
-            self.isLibraryPasteInFlight = false
-
-            guard SelectionCopyPolicy.shouldDismiss(written: written, error: error) else {
-                if let error {
-                    self.history.setCaptureError(error.localizedDescription)
-                } else if written == 0 {
-                    self.history.setCaptureError("Could not copy this item to the clipboard.")
-                }
-                return
-            }
-
-            self.suppressLibraryDismissRestore = true
-            self.libraryController?.close()
-            self.libraryRestoreApp = nil
-
-            if let target {
-                self.dispatchAutomaticPaste(to: target)
-            } else {
-                self.history.setCaptureError(
-                    "Copied to the clipboard, but there is no previous app to paste into. Press Command-V to paste manually."
-                )
-            }
-        }
-
-        if !started {
-            isLibraryPasteInFlight = false
-        }
-    }
-
-    private func handleLibraryDismiss() {
-        libraryQuickLook.close()
-        if suppressLibraryDismissRestore {
-            suppressLibraryDismissRestore = false
-            return
-        }
-
-        let target = libraryRestoreApp
-        libraryRestoreApp = nil
-        _ = target?.activate(options: [])
-    }
-
-    private func handleLibraryQuickLook(_ entry: ClipboardEntry) {
-        if libraryQuickLook.toggleCancelIfActive() { return }
-
-        let route = QuickLookPolicy.route(for: entry)
-        switch route {
-        case .unsupported(let message), .missingFiles(let message):
-            history.setCaptureError(message)
-            return
-        case .fileURLs, .materializeRetainedImage:
-            break
-        }
-
-        libraryQuickLook.present(route: route, entry: entry, engine: engine) { [weak self] message in
-            if let message {
-                self?.history.setCaptureError(message)
-            }
         }
     }
 
