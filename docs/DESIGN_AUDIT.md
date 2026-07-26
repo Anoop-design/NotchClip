@@ -7,8 +7,8 @@
 > kept because it still explains the constraints; the decisions section now
 > describes what shipped.
 
-The notch is the app. Control–V morphs it into a translucent panel that holds the
-entire searchable clipboard history, and gets a clip into the app the user was
+The notch is the app. Control–V morphs it into a compact all-black panel that holds
+the entire searchable clipboard history, and gets a clip into the app the user was
 already using. There is no second window.
 
 ### Why the original two-surface split was abandoned
