@@ -45,7 +45,7 @@ final class PanelGeometryTests: XCTestCase {
         XCTAssertLessThanOrEqual(expanded.maxX, screen.visibleFrame.maxX + 0.5)
     }
 
-    func testExpandedShelfUsesCompactIslandFootprint() {
+    func testExpandedPanelUsesCompactFootprintAtNotch() {
         let screen = ScreenMetrics(
             frame: CGRect(x: 0, y: 0, width: 1512, height: 982),
             visibleFrame: CGRect(x: 0, y: 0, width: 1512, height: 944),
@@ -53,8 +53,12 @@ final class PanelGeometryTests: XCTestCase {
             notchWidth: 180
         )
         let expanded = PanelGeometry.expandedFrame(on: screen)
-        XCTAssertEqual(expanded.width, 660, accuracy: 0.5)
-        XCTAssertEqual(expanded.height, 236, accuracy: 0.5)
+        XCTAssertEqual(expanded.width, PanelGeometry.expandedDefaultWidth, accuracy: 0.5)
+        XCTAssertEqual(expanded.height, PanelGeometry.expandedDefaultHeight, accuracy: 0.5)
+        // Deliberately compact: the panel must read as the notch opening,
+        // not a window — cap the footprint it may claim on a large display.
+        XCTAssertLessThanOrEqual(PanelGeometry.expandedDefaultWidth, 700)
+        XCTAssertLessThanOrEqual(PanelGeometry.expandedDefaultHeight, 480)
         XCTAssertEqual(expanded.maxY, screen.frame.maxY, accuracy: 0.5)
     }
 

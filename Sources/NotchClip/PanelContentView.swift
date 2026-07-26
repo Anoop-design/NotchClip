@@ -3,10 +3,10 @@ import SwiftUI
 import NotchClipCore
 
 enum PanelLayout {
-    static let headerHeight: CGFloat = 44
-    static let footerHeight: CGFloat = 34
-    static let listWidth: CGFloat = 300
-    static let rowHeight: CGFloat = 46
+    static let headerHeight: CGFloat = 40
+    static let footerHeight: CGFloat = 30
+    static let listWidth: CGFloat = 252
+    static let rowHeight: CGFloat = 44
     static let sectionHeaderHeight: CGFloat = 24
     static let glyphSize: CGFloat = 28
     static let horizontalPadding: CGFloat = 12

@@ -13,6 +13,7 @@ final class AppCoordinator: NSObject {
     private(set) var panelController: NotchPanelController?
     private(set) var hotKey: any HotKeyRegistering
     private let pasteDispatcher: PasteCommandDispatcher
+    private let capturePulse = CapturePulseController()
     private let accessibilityOnboarding: AccessibilityPermissionOnboardingController
     private(set) var storageError: String?
     private(set) var hotKeyError: String?
@@ -73,6 +74,7 @@ final class AppCoordinator: NSObject {
     func shutdown() {
         accessibilityOnboarding.shutdown()
         pasteDispatcher.cancelPending()
+        capturePulse.cancel()
         monitor?.stop()
         hotKey.unregister()
         panelController?.shutdown()
@@ -86,6 +88,8 @@ final class AppCoordinator: NSObject {
     func toggleClipboardPanel() {
         refreshAccessibilityStatus()
         rememberFrontmostIfNeeded()
+        // The panel supersedes any in-flight copy acknowledgment.
+        capturePulse.cancel()
 
         let panel = panelController
         let action = PanelPhasePolicy.toggleAction(for: panel?.phase ?? .hidden)
@@ -156,7 +160,14 @@ final class AppCoordinator: NSObject {
 
             let monitor = ClipboardMonitor(engine: engine)
             monitor.onCapture = { [weak self] result in
-                self?.history.applyCaptureResult(result)
+                guard let self else { return }
+                self.history.applyCaptureResult(result)
+                // Acknowledge the capture at the notch when the panel is closed.
+                let phase = self.panelController?.phase ?? .hidden
+                if CapturePulsePolicy.shouldShow(result: result, panelPhase: phase),
+                   let entry = CapturePulsePolicy.entry(for: result) {
+                    self.capturePulse.show(for: entry)
+                }
             }
             self.monitor = monitor
             monitor.start()

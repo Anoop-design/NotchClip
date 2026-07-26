@@ -31,11 +31,19 @@ navigation solves the same problem without capping what you can reach.
 
 ## Unified panel decisions
 
-- One surface: a translucent HUD that grows from the notch, sized 780×620.
+- One surface: an all-black HUD that grows from the notch, sized ~620×420.
+  A 780×620 translucent version was tried and rejected — the blur made it read
+  as "a window near the notch" rather than "the notch, open", and the size
+  read as a slab. Solid black + compact keeps the hardware illusion.
+- Captures are acknowledged in place: while the panel is closed, a successful
+  capture swells the notch into a brief "Copied · Source" lip that retracts
+  after ~1.5s (`CapturePulsePolicy`). The pulse window is never key and is
+  click-through, so it cannot steal focus or block menu-bar clicks; ⌃V cancels
+  it instantly.
 - The search field owns focus for the entire presentation. Typing filters; there is
   no separate "enter search mode".
 - The list is the complete history, sectioned Pinned / Today / Yesterday / Earlier,
-  at ~46pt per row so roughly eleven are visible at once.
+  at ~44pt per row (~7 visible; the rest scroll).
 - The preview pane shows the selection's **complete** content. Row summaries still
   use the collapsed 200-character `previewText`, but the pane loads the full retained
   payload off-main so long text and code keep their line structure.
