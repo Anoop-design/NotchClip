@@ -291,13 +291,20 @@ if ! command -v codesign >/dev/null 2>&1; then
 fi
 if [[ "${SIGNING_IDENTITY}" == "-" ]]; then
   codesign --force --sign - "${STAGE_APP}"
-else
+elif [[ "${SIGNING_IDENTITY}" == Developer\ ID* ]]; then
+  # Distribution path: hardened runtime + secure timestamp for notarization.
   codesign \
     --force \
     --sign "${SIGNING_IDENTITY}" \
     --options runtime \
     --timestamp \
     "${STAGE_APP}"
+else
+  # Local named identity (e.g. a self-signed "NotchClip Local Dev" cert).
+  # Unlike ad-hoc, this keeps the designated requirement stable across
+  # rebuilds, so TCC grants (Accessibility) survive. No hardened runtime or
+  # network timestamp needed for a local build.
+  codesign --force --sign "${SIGNING_IDENTITY}" "${STAGE_APP}"
 fi
 if ! codesign --verify --deep --strict --verbose=2 "${STAGE_APP}"; then
   echo "error: staged app failed strict code-signature verification" >&2

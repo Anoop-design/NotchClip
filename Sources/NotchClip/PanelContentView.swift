@@ -37,7 +37,7 @@ struct PanelRootView: View {
         VStack(spacing: 0) {
             header
 
-            Divider().overlay(NotchClipDesign.hairline)
+            PanelRule(axis: .horizontal)
 
             if let storageError = history.storageError {
                 PanelEmptyState(
@@ -50,7 +50,7 @@ struct PanelRootView: View {
                 bodyContent
             }
 
-            Divider().overlay(NotchClipDesign.hairline)
+            PanelRule(axis: .horizontal)
 
             PanelFooter(
                 clipCount: history.projection.visibleEntries.count,
@@ -129,7 +129,7 @@ struct PanelRootView: View {
                 clipList
                     .frame(width: PanelLayout.listWidth)
 
-                Divider().overlay(NotchClipDesign.hairline)
+                PanelRule(axis: .vertical)
 
                 ClipPreviewPane(
                     entry: selectedEntry,
@@ -681,6 +681,24 @@ private struct PanelHint: View {
 }
 
 // MARK: - Shared bits
+
+/// Barely-there separator. SwiftUI's `Divider` draws the system separator
+/// colour beneath any overlay, which reads far too bright on true black —
+/// this owns its whole pixel instead.
+private struct PanelRule: View {
+    enum Axis { case horizontal, vertical }
+    let axis: Axis
+
+    var body: some View {
+        Rectangle()
+            .fill(Color.white.opacity(0.045))
+            .frame(
+                width: axis == .vertical ? 1 : nil,
+                height: axis == .horizontal ? 1 : nil
+            )
+            .accessibilityHidden(true)
+    }
+}
 
 private struct PanelEmptyState: View {
     let title: String

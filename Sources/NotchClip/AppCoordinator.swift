@@ -282,12 +282,13 @@ final class AppCoordinator: NSObject {
                 let message = error.localizedDescription
                 if let failure = error as? PasteCommandDispatcher.DispatchFailure,
                    case .accessibilityPermissionRequired = failure {
-                    // If permission was deferred or revoked, preserve a useful
-                    // manual Command-V fallback in the intended destination,
-                    // then surface the actionable permission step immediately.
+                    // Surface the permission step and nothing else. Activating
+                    // the paste target here raced the setup window's own
+                    // activation, so the window could open behind the target
+                    // and the flow looked broken. The clip is already on the
+                    // clipboard; the message explains manual Command-V.
                     self.permissionPasteErrorMessage = message
                     self.history.setCaptureError(message)
-                    _ = target.activate(options: [])
                     self.accessibilityOnboarding.presentPermissionSetup()
                     return
                 }
