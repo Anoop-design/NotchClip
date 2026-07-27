@@ -4,7 +4,10 @@ import NotchClipCore
 
 enum PanelLayout {
     static let headerHeight: CGFloat = 40
-    static let footerHeight: CGFloat = 30
+    // Slightly taller than the strictly-needed 30 so the count and keycaps
+    // sit with a little air above the r24 bottom corners.
+    static let footerHeight: CGFloat = 36
+    static let footerPadding: CGFloat = 14
     static let listWidth: CGFloat = 252
     static let rowHeight: CGFloat = 44
     static let sectionHeaderHeight: CGFloat = 24
@@ -652,7 +655,7 @@ private struct PanelFooter: View {
             PanelHint(key: "↵", label: "Paste")
             PanelHint(key: "⌘1–6", label: "Filter")
         }
-        .padding(.horizontal, PanelLayout.horizontalPadding)
+        .padding(.horizontal, PanelLayout.footerPadding)
         .frame(height: PanelLayout.footerHeight)
         .accessibilityElement(children: .contain)
     }
