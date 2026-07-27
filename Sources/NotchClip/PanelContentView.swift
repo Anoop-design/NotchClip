@@ -693,8 +693,10 @@ private struct PanelRule: View {
     let axis: Axis
 
     var body: some View {
+        // 4.5% proved too faint, the system separator too bright; 7% sits on
+        // the same ladder as the other hairlines (6.5–7.5%).
         Rectangle()
-            .fill(Color.white.opacity(0.045))
+            .fill(Color.white.opacity(0.07))
             .frame(
                 width: axis == .vertical ? 1 : nil,
                 height: axis == .horizontal ? 1 : nil
