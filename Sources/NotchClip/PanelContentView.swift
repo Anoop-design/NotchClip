@@ -137,7 +137,28 @@ struct PanelRootView: View {
                 ClipPreviewPane(
                     entry: selectedEntry,
                     preview: selectedEntry.flatMap { history.previewCache[$0.id] },
-                    fullText: selectedEntry.flatMap { history.fullTextCache[$0.id] }
+                    fullText: selectedEntry.flatMap { history.fullTextCache[$0.id] },
+                    onPin: {
+                        guard let entry = selectedEntry else { return }
+                        history.togglePin(id: entry.id)
+                    },
+                    onCopy: {
+                        guard let entry = selectedEntry else { return }
+                        // Copy without dismissing: writes the exact entry back to
+                        // the clipboard and leaves the panel open. Self-write
+                        // suppression keeps it from re-capturing.
+                        history.paste(entryID: entry.id) { written, error in
+                            if let error {
+                                history.setCaptureError(error.localizedDescription)
+                            } else if written == 0 {
+                                history.setCaptureError("Could not copy this item to the clipboard.")
+                            }
+                        }
+                    },
+                    onDelete: {
+                        guard let entry = selectedEntry else { return }
+                        history.delete(id: entry.id)
+                    }
                 )
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
@@ -250,16 +271,18 @@ private struct ScopePicker: View {
                 )
             }
         } label: {
-            HStack(spacing: 4) {
-                Image(systemName: scope.systemImage)
-                    .font(.system(size: 10, weight: .semibold))
+            // Styled like a native pop-up button: title plus the stacked
+            // chevrons macOS uses everywhere for "this is a menu".
+            HStack(spacing: 6) {
                 Text(scope.title)
                     .font(.system(size: 11.5, weight: .medium))
-                Image(systemName: "chevron.down")
-                    .font(.system(size: 8, weight: .bold))
+                    .foregroundStyle(NotchClipDesign.primaryText.opacity(0.85))
+                Image(systemName: "chevron.up.chevron.down")
+                    .font(.system(size: 8.5, weight: .semibold))
+                    .foregroundStyle(NotchClipDesign.secondaryText)
             }
-            .foregroundStyle(NotchClipDesign.secondaryText)
-            .padding(.horizontal, 9)
+            .padding(.leading, 10)
+            .padding(.trailing, 8)
             .frame(height: 24)
             .background(
                 RoundedRectangle(cornerRadius: 7, style: .continuous)
@@ -267,7 +290,7 @@ private struct ScopePicker: View {
             )
             .overlay {
                 RoundedRectangle(cornerRadius: 7, style: .continuous)
-                    .strokeBorder(NotchClipDesign.border, lineWidth: 1)
+                    .strokeBorder(Color.white.opacity(0.12), lineWidth: 1)
             }
         }
         .menuStyle(.borderlessButton)
@@ -455,6 +478,12 @@ private struct ClipPreviewPane: View {
     let entry: ClipboardEntry?
     let preview: EntryPreview?
     let fullText: String?
+    var onPin: () -> Void = {}
+    var onCopy: () -> Void = {}
+    var onDelete: () -> Void = {}
+
+    /// Momentary checkmark after Copy; reset when the selection changes.
+    @State private var showCopied = false
 
     var body: some View {
         if let entry {
@@ -491,29 +520,55 @@ private struct ClipPreviewPane: View {
             footer(for: entry)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .onChange(of: entry.id) { _, _ in showCopied = false }
         .accessibilityElement(children: .contain)
         .accessibilityLabel("Preview of selected clip")
     }
 
+    /// Kind on the left; the selected clip's actions on the right. The source
+    /// app lives in the meta strip below, so this row is about *doing*.
     private func header(for entry: ClipboardEntry, row: EntryRowModel) -> some View {
         HStack(spacing: 7) {
             Image(systemName: NotchClipSymbols.symbol(for: row.kind))
                 .font(.system(size: 11, weight: .semibold))
                 .foregroundStyle(NotchClipDesign.secondaryText)
+                .accessibilityHidden(true)
             Text(row.kindLabel)
                 .font(.system(size: 12, weight: .semibold))
                 .foregroundStyle(NotchClipDesign.primaryText)
 
             Spacer(minLength: 8)
 
-            Text(EntryPresentation.sourceLabel(from: entry.source) ?? "Unknown")
-                .font(.system(size: 10.5))
-                .foregroundStyle(NotchClipDesign.tertiaryText)
-                .lineLimit(1)
+            PaneActionButton(
+                systemImage: entry.isPinned ? "pin.slash" : "pin",
+                label: entry.isPinned ? "Unpin" : "Pin",
+                shortcutHint: "⌘P",
+                action: onPin
+            )
+            PaneActionButton(
+                systemImage: showCopied ? "checkmark" : "doc.on.doc",
+                label: showCopied ? "Copied" : "Copy",
+                tint: showCopied ? NotchClipDesign.success : nil,
+                shortcutHint: nil,
+                action: {
+                    onCopy()
+                    withAnimation(.easeOut(duration: 0.12)) { showCopied = true }
+                    Task { @MainActor in
+                        try? await Task.sleep(for: .milliseconds(1200))
+                        withAnimation(.easeOut(duration: 0.2)) { showCopied = false }
+                    }
+                }
+            )
+            PaneActionButton(
+                systemImage: "trash",
+                label: "Delete",
+                shortcutHint: "⌘⌫",
+                action: onDelete
+            )
         }
-        .padding(.horizontal, 14)
+        .padding(.leading, 14)
+        .padding(.trailing, 9)
         .frame(height: 34)
-        .accessibilityElement(children: .combine)
     }
 
     @ViewBuilder
@@ -582,8 +637,15 @@ private struct ClipPreviewPane: View {
 
     private func footer(for entry: ClipboardEntry) -> some View {
         let bytes = entry.payloadRefs.reduce(0) { $0 + $1.byteCount }
+        // Source moved here from the pane header when actions took its place.
+        let parts = [
+            EntryPresentation.sourceLabel(from: entry.source),
+            entry.updatedAt.formatted(date: .abbreviated, time: .shortened)
+        ].compactMap { $0 }
         return HStack(spacing: 10) {
-            Text(entry.updatedAt.formatted(date: .abbreviated, time: .shortened))
+            Text(parts.joined(separator: " · "))
+                .lineLimit(1)
+                .truncationMode(.middle)
             Spacer(minLength: 8)
             Text(EntryPresentation.byteCountString(bytes))
         }
@@ -609,6 +671,38 @@ private struct ClipPreviewPane: View {
         .foregroundStyle(NotchClipDesign.tertiaryText)
         .frame(maxWidth: .infinity, minHeight: 120)
         .accessibilityElement(children: .combine)
+    }
+}
+
+/// Small icon button for the preview pane's action row.
+private struct PaneActionButton: View {
+    let systemImage: String
+    let label: String
+    var tint: Color? = nil
+    var shortcutHint: String?
+    let action: () -> Void
+
+    @State private var isHovering = false
+
+    var body: some View {
+        Button(action: action) {
+            Image(systemName: systemImage)
+                .font(.system(size: 11, weight: .medium))
+                .foregroundStyle(
+                    tint ?? (isHovering ? NotchClipDesign.primaryText : NotchClipDesign.secondaryText)
+                )
+                .frame(width: 26, height: 24)
+                .background(
+                    RoundedRectangle(cornerRadius: 6, style: .continuous)
+                        .fill(isHovering ? NotchClipDesign.surfaceHover : Color.clear)
+                )
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .onHover { isHovering = $0 }
+        .animation(.easeOut(duration: 0.10), value: isHovering)
+        .help(shortcutHint.map { "\(label) (\($0))" } ?? label)
+        .accessibilityLabel(label)
     }
 }
 
