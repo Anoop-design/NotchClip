@@ -61,8 +61,28 @@ struct PanelRootView: View {
                 isPaused: history.isPaused,
                 captureError: history.captureError,
                 canPaste: selectedEntry != nil,
+                selectedIsPinned: selectedEntry?.isPinned ?? false,
+                scope: $history.scope,
                 onDismissError: history.clearCaptureError,
-                onPaste: onSelect
+                onPaste: onSelect,
+                onPin: {
+                    guard let entry = selectedEntry else { return }
+                    history.togglePin(id: entry.id)
+                },
+                onCopy: {
+                    guard let entry = selectedEntry else { return }
+                    history.paste(entryID: entry.id) { written, error in
+                        if let error {
+                            history.setCaptureError(error.localizedDescription)
+                        } else if written == 0 {
+                            history.setCaptureError("Could not copy this item to the clipboard.")
+                        }
+                    }
+                },
+                onDelete: {
+                    guard let entry = selectedEntry else { return }
+                    history.delete(id: entry.id)
+                }
             )
         }
         // The cap sits over the physical notch, so content starts below it.
@@ -714,8 +734,13 @@ private struct PanelFooter: View {
     let isPaused: Bool
     let captureError: String?
     let canPaste: Bool
+    var selectedIsPinned: Bool = false
+    @Binding var scope: ClipScope
     let onDismissError: () -> Void
     let onPaste: () -> Void
+    var onPin: () -> Void = {}
+    var onCopy: () -> Void = {}
+    var onDelete: () -> Void = {}
 
     var body: some View {
         HStack(spacing: 10) {
@@ -747,11 +772,70 @@ private struct PanelFooter: View {
 
             PanelHint(key: "↑↓", label: "Move")
             PanelHint(key: "↵", label: "Paste")
-            PanelHint(key: "⌘1–6", label: "Filter")
+            actionsMenu
         }
         .padding(.horizontal, PanelLayout.footerPadding)
         .frame(height: PanelLayout.footerHeight)
         .accessibilityElement(children: .contain)
+    }
+
+    /// Every action on the selected clip, with its shortcut, in one labeled
+    /// place — the icon-only pane buttons were too easy to miss.
+    private var actionsMenu: some View {
+        Menu {
+            Button("Paste into Previous App", systemImage: "arrow.turn.down.left", action: onPaste)
+                .disabled(!canPaste)
+            Button(
+                selectedIsPinned ? "Unpin" : "Pin",
+                systemImage: selectedIsPinned ? "pin.slash" : "pin",
+                action: onPin
+            )
+            .disabled(!canPaste)
+            Button("Copy to Clipboard", systemImage: "doc.on.doc", action: onCopy)
+                .disabled(!canPaste)
+
+            Divider()
+
+            // The old "⌘1–6 Filter" keycap lived here; the filter is now a
+            // submenu so the footer teaches the shortcuts in context.
+            Picker("Filter", selection: $scope) {
+                ForEach(ClipScope.allCases) { option in
+                    Label(option.title, systemImage: option.systemImage)
+                        .tag(option)
+                }
+            }
+            .pickerStyle(.menu)
+
+            Divider()
+
+            Button("Delete", systemImage: "trash", role: .destructive, action: onDelete)
+                .disabled(!canPaste)
+        } label: {
+            HStack(spacing: 5) {
+                Text("Actions")
+                    .font(.system(size: 11.5, weight: .medium))
+                    .foregroundStyle(NotchClipDesign.primaryText.opacity(0.85))
+                Image(systemName: "chevron.up.chevron.down")
+                    .font(.system(size: 8.5, weight: .semibold))
+                    .foregroundStyle(NotchClipDesign.secondaryText)
+            }
+            .padding(.leading, 10)
+            .padding(.trailing, 8)
+            .frame(height: 24)
+            .background(
+                RoundedRectangle(cornerRadius: 7, style: .continuous)
+                    .fill(NotchClipDesign.surfaceStrong)
+            )
+            .overlay {
+                RoundedRectangle(cornerRadius: 7, style: .continuous)
+                    .strokeBorder(Color.white.opacity(0.12), lineWidth: 1)
+            }
+        }
+        .menuStyle(.borderlessButton)
+        .menuIndicator(.hidden)
+        .fixedSize()
+        .accessibilityLabel("Actions for the selected clip")
+        .help("Paste, pin, copy, filter, or delete")
     }
 
     private var countLabel: String {
