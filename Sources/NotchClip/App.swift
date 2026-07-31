@@ -19,6 +19,7 @@ struct NotchClipApp: App {
             SettingsView(
                 history: coordinator.history,
                 accessibility: coordinator.accessibility,
+                launchAtLogin: coordinator.launchAtLogin,
                 hotKeyError: coordinator.hotKeyError,
                 isHotKeyRegistered: coordinator.hotKey.isRegistered,
                 isPaused: coordinator.isPaused,

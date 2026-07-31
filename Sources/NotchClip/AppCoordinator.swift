@@ -8,6 +8,7 @@ import NotchClipCore
 final class AppCoordinator: NSObject {
     let history = HistoryModel()
     let accessibility: AccessibilityPermissionState
+    let launchAtLogin = LaunchAtLoginController()
     private(set) var engine: ClipboardEngine?
     private(set) var monitor: ClipboardMonitor?
     private(set) var panelController: NotchPanelController?

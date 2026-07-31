@@ -5,6 +5,7 @@ import NotchClipCore
 struct SettingsView: View {
     @Bindable var history: HistoryModel
     @Bindable var accessibility: AccessibilityPermissionState
+    @Bindable var launchAtLogin: LaunchAtLoginController
     var hotKeyError: String?
     var isHotKeyRegistered: Bool
     var isPaused: Bool
@@ -29,6 +30,7 @@ struct SettingsView: View {
         .onAppear {
             history.refreshStorageStats()
             accessibility.refresh()
+            launchAtLogin.refresh()
         }
         .onReceive(
             NSWorkspace.shared.notificationCenter.publisher(
@@ -36,6 +38,7 @@ struct SettingsView: View {
             )
         ) { _ in
             accessibility.refresh()
+            launchAtLogin.refresh()
         }
         .confirmationDialog(
             "Clear unpinned history?",
@@ -78,6 +81,39 @@ struct SettingsView: View {
                     Label("Shortcut is active", systemImage: "checkmark.circle.fill")
                         .foregroundStyle(.secondary)
                         .font(.caption)
+                }
+            }
+            Section("Startup") {
+                Toggle("Launch NotchClip at login", isOn: Binding(
+                    get: { launchAtLogin.isRequested },
+                    set: { launchAtLogin.setEnabled($0) }
+                ))
+                Text("Keeps NotchClip ready to capture clipboard history after you sign in.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+
+                if launchAtLogin.needsApproval {
+                    Label(
+                        "macOS needs your approval in Login Items.",
+                        systemImage: "exclamationmark.circle.fill"
+                    )
+                    .foregroundStyle(NotchClipDesign.warning)
+                    .font(.caption)
+
+                    Button("Open Login Items…") {
+                        launchAtLogin.openLoginItemsSettings()
+                    }
+                } else if let errorMessage = launchAtLogin.errorMessage {
+                    Label(errorMessage, systemImage: "exclamationmark.circle.fill")
+                        .foregroundStyle(NotchClipDesign.warning)
+                        .font(.caption)
+                } else if launchAtLogin.state == .unavailable {
+                    Label(
+                        "Launch at Login is unavailable for this copy of NotchClip.",
+                        systemImage: "exclamationmark.circle.fill"
+                    )
+                    .foregroundStyle(NotchClipDesign.warning)
+                    .font(.caption)
                 }
             }
             Section("Automatic Paste") {

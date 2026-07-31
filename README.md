@@ -109,6 +109,7 @@ Captures accessible pasteboard flavors, including:
 - **History lifetime:** kept **indefinitely** until you clear unpinned items or clear all history in Settings. There is no automatic time-based purge of clipboard history.
 - **File copies:** original file URLs are **references**. NotchClip does **not** copy source files into storage. If a file is moved or deleted, drag-out / preview for that original path will not work (missing-file state is detected).
 - **Preferences:** local `UserDefaults` (e.g. link-preview fetch toggle).
+- **Launch at Login:** optional in Settings → General. NotchClip uses macOS Service Management to register the signed main app as a user-controlled login item.
 
 ## Link previews (privacy)
 
@@ -143,7 +144,7 @@ On first launch, NotchClip shows a one-time explanation before asking macOS for 
 
 - **Native architecture only** — the local path uses an ad-hoc signature; the release path supports Developer ID, notarization, stapling, and Gatekeeper validation.  
 - A polished drag-to-Applications DMG workflow and custom app icon are included. A real notarized artifact still requires the developer certificate and notary credentials described above.  
-- **No launch-at-login** and **no configurable global shortcut** yet (Control–V is fixed). See [docs/UX_AUDIT.md](docs/UX_AUDIT.md) for the full gap list.  
+- **No configurable global shortcut** yet (Control–V is fixed). See [docs/UX_AUDIT.md](docs/UX_AUDIT.md) for the full gap list.
 - GUI automation / interactive GUI tests are not part of the package test suite.  
 - The current atomic JSON history store is appropriate for a personal v1, but an indexed SQLite/FTS migration is planned before histories reach many thousands of entries.
 - Copies distributed to other Macs will require Developer ID signing and notarization for normal Gatekeeper acceptance.
