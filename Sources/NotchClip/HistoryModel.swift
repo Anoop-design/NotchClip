@@ -111,6 +111,7 @@ final class HistoryModel {
     func attach(engine: ClipboardEngine?, supportRoot: URL?) {
         self.engine = engine
         self.supportRootPath = supportRoot?.path ?? ""
+        engine?.setHistoryLimit(preferences.historyLimit)
         if linkPreviews == nil {
             if let root = try? LinkPreviewCache.defaultRoot(),
                let cache = try? LinkPreviewCache(rootDirectory: root) {
@@ -206,6 +207,17 @@ final class HistoryModel {
     func setShowCapturePulse(_ enabled: Bool) {
         preferences.showCapturePulse = enabled
         preferences.save()
+    }
+
+    /// Lowering the limit prunes immediately; raising it only changes future captures.
+    func setHistoryLimit(_ limit: Int) {
+        preferences.historyLimit = limit
+        preferences.save()
+        guard let engine else { return }
+        engine.setHistoryLimit(limit)
+        runMutation {
+            try engine.enforceRetentionLimit()
+        }
     }
 
     func setFetchLinkPreviews(_ enabled: Bool) {

@@ -11,9 +11,19 @@ public protocol ClipboardRepository: AnyObject, Sendable {
     func entry(id: UUID) throws -> ClipboardEntry?
     func upsert(_ entry: ClipboardEntry) throws
     func remove(id: UUID) throws
+    /// Bulk removal in a single publish (retention eviction).
+    func remove(ids: Set<UUID>) throws
     func removeAll() throws
     func sortedEntries() throws -> [ClipboardEntry]
     func search(query: String) throws -> [ClipboardEntry]
+}
+
+extension ClipboardRepository {
+    public func remove(ids: Set<UUID>) throws {
+        for id in ids {
+            try remove(id: id)
+        }
+    }
 }
 
 public enum ClipboardSorting {
@@ -171,6 +181,16 @@ public final class PersistentClipboardRepository: ClipboardRepository, @unchecke
         try queue.sync {
             var envelope = try load()
             envelope.entries.removeAll { $0.id == id }
+            try writeEnvelope(envelope)
+        }
+    }
+
+    /// One decode + one publish regardless of how many entries are dropped.
+    public func remove(ids: Set<UUID>) throws {
+        guard !ids.isEmpty else { return }
+        try queue.sync {
+            var envelope = try load()
+            envelope.entries.removeAll { ids.contains($0.id) }
             try writeEnvelope(envelope)
         }
     }

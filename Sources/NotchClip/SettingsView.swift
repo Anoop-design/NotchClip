@@ -173,6 +173,21 @@ struct SettingsView: View {
                     }
                 }
             }
+            Section("Retention") {
+                Picker("Keep at most", selection: Binding(
+                    get: { history.preferences.historyLimit },
+                    set: { history.setHistoryLimit($0) }
+                )) {
+                    Text("100 items").tag(100)
+                    Text("250 items").tag(250)
+                    Text("500 items").tag(500)
+                    Text("1,000 items").tag(1_000)
+                    Text("Unlimited").tag(RetentionPolicy.unlimited)
+                }
+                Text("Oldest items are removed automatically once the limit is reached. Pinned items never count against the limit and are never removed.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
             Section("History Cleanup") {
                 Button("Clear Unpinned…", role: .destructive) {
                     confirmClearUnpinned = true

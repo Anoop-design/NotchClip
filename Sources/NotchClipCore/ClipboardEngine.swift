@@ -415,6 +415,8 @@ public final class ClipboardEngine: @unchecked Sendable {
     private let operationLock = NSLock()
     /// One-shot self-write token: ignore this exact change count once, then clear.
     private var suppressedChangeCount: Int?
+    /// Retention cap; read and written only under `operationLock`.
+    private var historyLimit = RetentionPolicy.defaultLimit
 
     public init(
         repository: any ClipboardRepository,
@@ -505,7 +507,8 @@ public final class ClipboardEngine: @unchecked Sendable {
 
     private func ingestLocked(parsed: ParsedPasteboardItem) -> CaptureResult {
         do {
-            let existing = try repository.allEntries().first { $0.fingerprint == parsed.fingerprint }
+            let entries = try repository.allEntries()
+            let existing = entries.first { $0.fingerprint == parsed.fingerprint }
             if var match = existing {
                 match.updatedAt = .now
                 match.previewText = parsed.previewText
@@ -541,6 +544,8 @@ public final class ClipboardEngine: @unchecked Sendable {
             )
             do {
                 try repository.upsert(entry)
+                // Reuses the list already read above; trimming never fails a good capture.
+                evictOverLimitLocked(entries: entries + [entry])
                 return .inserted(entry)
             } catch {
                 // Metadata failed after payloads landed — remove payload directory.
@@ -549,6 +554,44 @@ public final class ClipboardEngine: @unchecked Sendable {
             }
         } catch {
             return .failed(.unknown(String(describing: error)))
+        }
+    }
+
+    // MARK: - Retention
+
+    /// Set the maximum unpinned entries kept. Does not prune on its own —
+    /// callers that lower the limit follow with `enforceRetentionLimit()`.
+    public func setHistoryLimit(_ limit: Int) {
+        operationLock.lock()
+        defer { operationLock.unlock() }
+        historyLimit = limit
+    }
+
+    /// Trim history to the current cap and report how many entries were evicted.
+    @discardableResult
+    public func enforceRetentionLimit() throws -> Int {
+        operationLock.lock()
+        defer { operationLock.unlock() }
+        let ids = RetentionPolicy.idsToEvict(
+            entries: try repository.allEntries(),
+            limit: historyLimit
+        )
+        try evictLocked(ids: ids)
+        return ids.count
+    }
+
+    /// Capture-path trim. Failures are swallowed: the clip itself landed fine.
+    private func evictOverLimitLocked(entries: [ClipboardEntry]) {
+        try? evictLocked(ids: RetentionPolicy.idsToEvict(entries: entries, limit: historyLimit))
+    }
+
+    /// Metadata first (one publish for the whole batch), then payload bytes —
+    /// a failed payload delete never leaves a live broken row.
+    private func evictLocked(ids: [UUID]) throws {
+        guard !ids.isEmpty else { return }
+        try repository.remove(ids: Set(ids))
+        for id in ids {
+            try? payloadStore.removeAll(for: id)
         }
     }
 
@@ -565,10 +608,15 @@ public final class ClipboardEngine: @unchecked Sendable {
         try repository.upsert(entry)
     }
 
-    /// Remove metadata first so a failed payload delete never leaves a live broken row.
     public func delete(id: UUID) throws {
         operationLock.lock()
         defer { operationLock.unlock() }
+        try deleteLocked(id: id)
+    }
+
+    /// Remove metadata first so a failed payload delete never leaves a live broken row.
+    /// Single removal path for user deletes and retention eviction — payloads never orphan.
+    private func deleteLocked(id: UUID) throws {
         try repository.remove(id: id)
         try? payloadStore.removeAll(for: id)
     }
