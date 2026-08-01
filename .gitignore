@@ -9,6 +9,7 @@ DerivedData/
 .netrc
 *.pem
 *.p12
+sparkle-private-key*.txt
 *.mobileprovision
 .idea/
 .vscode/

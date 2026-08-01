@@ -90,6 +90,29 @@ ICON_NAME="$(read_key CFBundleIconFile)"
 [[ "${ICON_NAME}" == "AppIcon" || "${ICON_NAME}" == "AppIcon.icns" ]] || fail "CFBundleIconFile is '${ICON_NAME}', expected AppIcon"
 pass "custom AppIcon.icns is configured"
 
+# A shipped build that cannot update itself can never be fixed in place, so the
+# updater's framework and all three Sparkle keys are hard requirements.
+SPARKLE="${APP}/Contents/Frameworks/Sparkle.framework"
+[[ -d "${SPARKLE}" ]] || fail "missing Contents/Frameworks/Sparkle.framework"
+[[ -e "${SPARKLE}/Versions/Current/Sparkle" ]] || fail "Sparkle.framework has no Versions/Current/Sparkle"
+pass "Sparkle.framework is embedded"
+
+FEED_URL="$(read_key SUFeedURL)"
+case "${FEED_URL}" in
+  https://*) ;;
+  *) fail "SUFeedURL is '${FEED_URL}', expected an https URL" ;;
+esac
+pass "SUFeedURL=${FEED_URL}"
+
+PUBLIC_ED_KEY="$(read_key SUPublicEDKey)"
+[[ -n "${PUBLIC_ED_KEY}" ]] || fail "missing SUPublicEDKey; updates could not be verified"
+pass "SUPublicEDKey is present"
+
+AUTOMATIC_CHECKS_TYPE="$(plutil -type SUEnableAutomaticChecks "${PLIST}" 2>/dev/null || true)"
+[[ "${AUTOMATIC_CHECKS_TYPE}" == "bool" || "${AUTOMATIC_CHECKS_TYPE}" == "boolean" ]] \
+  || fail "SUEnableAutomaticChecks type is '${AUTOMATIC_CHECKS_TYPE}', expected bool"
+pass "SUEnableAutomaticChecks is a boolean"
+
 FILE_OUT="$(file -b "${EXE}" 2>/dev/null || true)"
 case "${FILE_OUT}" in
   *Mach-O*) ;;

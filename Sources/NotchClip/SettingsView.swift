@@ -6,6 +6,7 @@ struct SettingsView: View {
     @Bindable var history: HistoryModel
     @Bindable var accessibility: AccessibilityPermissionState
     @Bindable var launchAtLogin: LaunchAtLoginController
+    @Bindable var updater: UpdaterController
     var hotKeyError: String?
     var isHotKeyRegistered: Bool
     var hotKeyBinding: NotchClipHotKeyBinding
@@ -175,6 +176,21 @@ struct SettingsView: View {
                     Text("Acknowledge copies at the notch")
                 }
                 Text("Briefly shows “Copied” at the notch when something new is captured. Off by default.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            Section("Updates") {
+                Toggle(isOn: Binding(
+                    get: { updater.automaticallyChecksForUpdates },
+                    set: { updater.setAutomaticallyChecksForUpdates($0) }
+                )) {
+                    Text("Check for updates automatically")
+                }
+                Button("Check for Updates…") {
+                    updater.checkForUpdates()
+                }
+                .disabled(!updater.canCheckForUpdates)
+                Text("NotchClip is on version \(appVersion). Updates are downloaded from the NotchClip release feed and verified against a signing key built into this app before they are installed.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }

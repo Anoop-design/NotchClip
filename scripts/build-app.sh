@@ -236,6 +236,33 @@ while IFS= read -r RPATH; do
 done < <(otool -l "${STAGE_APP}/Contents/MacOS/NotchClip" \
   | awk '/LC_RPATH/{f=1} f&&/^ *path /{print $2; f=0}')
 
+# Sparkle is a binary XCFramework dependency, so the app must carry the
+# framework itself. The executable loads it as @rpath/Sparkle.framework/…, and
+# none of the rpaths the linker recorded survive the strip above, so add the
+# bundle-relative one here — before signing, which must cover the final bytes.
+SPARKLE_FRAMEWORK=""
+while IFS= read -r candidate; do
+  SPARKLE_FRAMEWORK="${candidate}"
+  break
+done < <(find "${BUILD_DIR}/artifacts" -type d -name Sparkle.framework -path '*/Sparkle.xcframework/macos*' 2>/dev/null | sort)
+if [[ -z "${SPARKLE_FRAMEWORK}" ]]; then
+  echo "error: Sparkle.framework not found under ${BUILD_DIR}/artifacts" >&2
+  echo "The Sparkle binary artifact did not resolve; re-run 'swift package resolve'." >&2
+  exit 1
+fi
+
+mkdir -p "${STAGE_APP}/Contents/Frameworks"
+# ditto (not cp -R) so the framework's version symlinks survive; codesign
+# rejects a versioned bundle whose Versions/Current link was flattened.
+ditto "${SPARKLE_FRAMEWORK}" "${STAGE_APP}/Contents/Frameworks/Sparkle.framework"
+echo "  sparkle: ${SPARKLE_FRAMEWORK}"
+
+if ! otool -l "${STAGE_APP}/Contents/MacOS/NotchClip" \
+  | awk '/LC_RPATH/{f=1} f&&/^ *path /{print $2; f=0}' \
+  | grep -qx '@executable_path/../Frameworks'; then
+  install_name_tool -add_rpath '@executable_path/../Frameworks' "${STAGE_APP}/Contents/MacOS/NotchClip"
+fi
+
 if [[ -d "${RESOURCES_SRC}" ]] && [[ -n "$(find "${RESOURCES_SRC}" -mindepth 1 -print -quit 2>/dev/null)" ]]; then
   mkdir -p "${STAGE_APP}/Contents/Resources"
   cp -R "${RESOURCES_SRC}/." "${STAGE_APP}/Contents/Resources/"
@@ -289,10 +316,43 @@ if ! command -v codesign >/dev/null 2>&1; then
   echo "error: codesign is required to create a runnable macOS app" >&2
   exit 1
 fi
+# Sparkle's nested code (two XPC services, the Autoupdate tool, and Updater.app)
+# each carry their own signature and must be re-signed inside-out with this
+# app's identity before the outer bundle is sealed. Order and the Downloader's
+# preserved entitlements follow Sparkle's official code-signing instructions.
+SPARKLE_VERSION_DIR="${STAGE_APP}/Contents/Frameworks/Sparkle.framework/Versions/B"
+if [[ ! -d "${SPARKLE_VERSION_DIR}" ]]; then
+  echo "error: staged Sparkle.framework has no Versions/B; refusing to sign" >&2
+  exit 1
+fi
+
+sign_sparkle_components() {
+  # Every argument is passed through to codesign for each nested component.
+  local downloader="${SPARKLE_VERSION_DIR}/XPCServices/Downloader.xpc"
+  if [[ -e "${downloader}" ]]; then
+    # Ships pre-entitled for sandboxed hosts; re-signing without this would
+    # drop the entitlements it needs.
+    codesign --force --sign "${SIGNING_IDENTITY}" "$@" \
+      --preserve-metadata=entitlements "${downloader}"
+  fi
+  local component
+  for component in \
+    "${SPARKLE_VERSION_DIR}/XPCServices/Installer.xpc" \
+    "${SPARKLE_VERSION_DIR}/Updater.app" \
+    "${SPARKLE_VERSION_DIR}/Autoupdate" \
+    "${STAGE_APP}/Contents/Frameworks/Sparkle.framework"
+  do
+    [[ -e "${component}" ]] || continue
+    codesign --force --sign "${SIGNING_IDENTITY}" "$@" "${component}"
+  done
+}
+
 if [[ "${SIGNING_IDENTITY}" == "-" ]]; then
+  sign_sparkle_components
   codesign --force --sign - "${STAGE_APP}"
 elif [[ "${SIGNING_IDENTITY}" == Developer\ ID* ]]; then
   # Distribution path: hardened runtime + secure timestamp for notarization.
+  sign_sparkle_components --options runtime --timestamp
   codesign \
     --force \
     --sign "${SIGNING_IDENTITY}" \
@@ -304,6 +364,7 @@ else
   # Unlike ad-hoc, this keeps the designated requirement stable across
   # rebuilds, so TCC grants (Accessibility) survive. No hardened runtime or
   # network timestamp needed for a local build.
+  sign_sparkle_components
   codesign --force --sign "${SIGNING_IDENTITY}" "${STAGE_APP}"
 fi
 if ! codesign --verify --deep --strict --verbose=2 "${STAGE_APP}"; then

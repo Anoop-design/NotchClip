@@ -30,5 +30,11 @@
 	<true/>
 	<key>NSPrincipalClass</key>
 	<string>NSApplication</string>
+	<key>SUEnableAutomaticChecks</key>
+	<true/>
+	<key>SUFeedURL</key>
+	<string>https://anoop-design.github.io/NotchClip/appcast.xml</string>
+	<key>SUPublicEDKey</key>
+	<string>Z33ufQy6nj3hJoe+SaFAMgQARyNfa6PnTF804MzFdN8=</string>
 </dict>
 </plist>

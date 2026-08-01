@@ -9,6 +9,7 @@ final class AppCoordinator: NSObject {
     let history = HistoryModel()
     let accessibility: AccessibilityPermissionState
     let launchAtLogin = LaunchAtLoginController()
+    let updater = UpdaterController()
     private(set) var engine: ClipboardEngine?
     private(set) var monitor: ClipboardMonitor?
     private(set) var panelController: NotchPanelController?
@@ -67,6 +68,7 @@ final class AppCoordinator: NSObject {
         bootstrapStorage()
         configureHotKey()
         configureFocusTracking()
+        updater.start()
         if panelController == nil {
             let panel = NotchPanelController(history: history)
             panel.onDismiss = { [weak self] reason in

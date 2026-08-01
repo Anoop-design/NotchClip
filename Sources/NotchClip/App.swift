@@ -20,6 +20,7 @@ struct NotchClipApp: App {
                 history: coordinator.history,
                 accessibility: coordinator.accessibility,
                 launchAtLogin: coordinator.launchAtLogin,
+                updater: coordinator.updater,
                 hotKeyError: coordinator.hotKeyError,
                 isHotKeyRegistered: coordinator.hotKey.isRegistered,
                 hotKeyBinding: coordinator.hotKeyBinding,
@@ -85,6 +86,11 @@ struct NotchClipApp: App {
         }
 
         Divider()
+
+        Button("Check for Updates…") {
+            coordinator.updater.checkForUpdates()
+        }
+        .disabled(!coordinator.updater.canCheckForUpdates)
 
         SettingsLink {
             Text("Settings…")

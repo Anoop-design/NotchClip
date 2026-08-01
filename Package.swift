@@ -10,6 +10,9 @@ let package = Package(
         .library(name: "NotchClipCore", targets: ["NotchClipCore"]),
         .executable(name: "NotchClip", targets: ["NotchClip"])
     ],
+    dependencies: [
+        .package(url: "https://github.com/sparkle-project/Sparkle", from: "2.6.0")
+    ],
     targets: [
         .target(
             name: "NotchClipCore",
@@ -17,7 +20,10 @@ let package = Package(
         ),
         .executableTarget(
             name: "NotchClip",
-            dependencies: ["NotchClipCore"],
+            dependencies: [
+                "NotchClipCore",
+                .product(name: "Sparkle", package: "Sparkle")
+            ],
             path: "Sources/NotchClip"
         ),
         .testTarget(
