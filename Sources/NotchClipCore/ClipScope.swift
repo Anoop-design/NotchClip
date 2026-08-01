@@ -3,8 +3,8 @@ import Foundation
 /// Content filter applied to the history list.
 ///
 /// Pure and AppKit-free so the filter predicate stays unit-testable. The unified
-/// panel exposes these as ⌘1–⌘6 rather than as a sidebar, so the ordering here is
-/// also the shortcut ordering.
+/// panel exposes these as ⌥1–⌥6 rather than as a sidebar, so the ordering here is
+/// also the shortcut ordering. (⌘1–⌘9 pastes by row position instead.)
 public enum ClipScope: String, CaseIterable, Identifiable, Hashable, Sendable {
     case all
     case pinned
@@ -37,7 +37,7 @@ public enum ClipScope: String, CaseIterable, Identifiable, Hashable, Sendable {
         }
     }
 
-    /// 1-based position, used for the ⌘1–⌘6 shortcuts.
+    /// 1-based position, used for the ⌥1–⌥6 shortcuts.
     public var shortcutNumber: Int {
         (Self.allCases.firstIndex(of: self) ?? 0) + 1
     }
@@ -165,6 +165,22 @@ public struct ClipProjection: Equatable, Sendable {
     public func entry(id: UUID) -> ClipboardEntry? {
         visibleEntries.first { $0.id == id }
     }
+
+    /// Resolve a 1-based row position to the entry displayed there (⌘1–⌘9).
+    ///
+    /// `visibleEntries` is the flattened section order, so the ordinal counts
+    /// top-to-bottom across section headers exactly as the list draws it.
+    /// Highest supported position is `maxQuickPasteOrdinal`; anything outside
+    /// the current filtering returns nil rather than falling back to a row.
+    public func entry(atOrdinal ordinal: Int) -> ClipboardEntry? {
+        guard ordinal >= 1, ordinal <= Self.maxQuickPasteOrdinal else { return nil }
+        let index = ordinal - 1
+        guard index < visibleEntries.count else { return nil }
+        return visibleEntries[index]
+    }
+
+    /// ⌘0 is not a position and double digits cannot be typed as one shortcut.
+    public static let maxQuickPasteOrdinal = 9
 
     /// Move selection by `delta` through the flattened display order, clamping at both ends.
     public func moveSelection(from currentID: UUID?, delta: Int) -> UUID? {

@@ -21,7 +21,7 @@ final class HistoryModel {
             rebuildProjection()
         }
     }
-    /// Active content filter (⌘1–⌘6 in the panel).
+    /// Active content filter (⌥1–⌥6 in the panel).
     var scope: ClipScope = .all {
         didSet {
             guard scope != oldValue else { return }
@@ -220,6 +220,19 @@ final class HistoryModel {
         }
     }
 
+    func setAlwaysPastePlainText(_ enabled: Bool) {
+        preferences.alwaysPastePlainText = enabled
+        preferences.save()
+    }
+
+    /// Whether a paste performed with `shiftHeld` should strip formatting.
+    func usesPlainText(shiftHeld: Bool) -> Bool {
+        PlainTextPastePolicy.usesPlainText(
+            alwaysPlainText: preferences.alwaysPastePlainText,
+            shiftHeld: shiftHeld
+        )
+    }
+
     func setFetchLinkPreviews(_ enabled: Bool) {
         preferences.fetchLinkPreviews = enabled
         preferences.save()
@@ -386,19 +399,26 @@ final class HistoryModel {
     /// while one paste is in flight. Gate clears on success or error.
     /// `written > 0` is required for success; zero-write/errors do not dismiss.
     @discardableResult
-    func pasteSelected(completion: @escaping (Int, Error?) -> Void) -> Bool {
+    func pasteSelected(
+        plainText: Bool = false,
+        completion: @escaping (Int, Error?) -> Void
+    ) -> Bool {
         guard let entry = selectedEntry() else {
             completion(0, nil)
             return false
         }
-        return paste(entryID: entry.id, completion: completion)
+        return paste(entryID: entry.id, plainText: plainText, completion: completion)
     }
 
     /// Copy a specific archive entry without coupling the caller to the panel's
     /// query or selection projection. Used by the full-history library.
+    ///
+    /// `plainText` writes only the clip's plain string; kinds with no plain-text
+    /// form fall back to the full representation set inside the engine.
     @discardableResult
     func paste(
         entryID: UUID,
+        plainText: Bool = false,
         completion: @escaping (Int, Error?) -> Void
     ) -> Bool {
         guard SelectionCopyCompletionPolicy.shouldStartPaste(isPasteInFlight: isPasteInFlight) else {
@@ -415,7 +435,9 @@ final class HistoryModel {
         isPasteInFlight = true
         pasteQueue.async { [weak self] in
             do {
-                let written = try engine.paste(entry: entry)
+                let written = plainText
+                    ? try engine.pastePlainText(entry: entry)
+                    : try engine.paste(entry: entry)
                 DispatchQueue.main.async {
                     guard let self else { return }
                     self.isPasteInFlight = false

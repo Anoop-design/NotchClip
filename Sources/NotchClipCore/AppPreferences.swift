@@ -8,19 +8,24 @@ public struct AppPreferences: Equatable, Sendable {
     public var showCapturePulse: Bool
     /// Maximum unpinned entries kept in history; `RetentionPolicy.unlimited` keeps everything.
     public var historyLimit: Int
+    /// When on, a plain paste strips formatting and ⇧ pastes with it instead.
+    public var alwaysPastePlainText: Bool
 
     public static let fetchLinkPreviewsKey = "com.anoop.notchclip.fetchLinkPreviews"
     public static let showCapturePulseKey = "com.anoop.notchclip.showCapturePulse"
     public static let historyLimitKey = "com.anoop.notchclip.historyLimit"
+    public static let alwaysPastePlainTextKey = "com.anoop.notchclip.alwaysPastePlainText"
 
     public init(
         fetchLinkPreviews: Bool = true,
         showCapturePulse: Bool = false,
-        historyLimit: Int = RetentionPolicy.defaultLimit
+        historyLimit: Int = RetentionPolicy.defaultLimit,
+        alwaysPastePlainText: Bool = false
     ) {
         self.fetchLinkPreviews = fetchLinkPreviews
         self.showCapturePulse = showCapturePulse
         self.historyLimit = historyLimit
+        self.alwaysPastePlainText = alwaysPastePlainText
     }
 
     public static func load(defaults: UserDefaults = .standard) -> AppPreferences {
@@ -33,10 +38,13 @@ public struct AppPreferences: Equatable, Sendable {
         let historyLimit = defaults.object(forKey: historyLimitKey) == nil
             ? RetentionPolicy.defaultLimit
             : defaults.integer(forKey: historyLimitKey)
+        // Absent key means the default (off); bool(forKey:) already returns false.
+        let alwaysPastePlainText = defaults.bool(forKey: alwaysPastePlainTextKey)
         return AppPreferences(
             fetchLinkPreviews: fetchLinkPreviews,
             showCapturePulse: showCapturePulse,
-            historyLimit: historyLimit
+            historyLimit: historyLimit,
+            alwaysPastePlainText: alwaysPastePlainText
         )
     }
 
@@ -44,6 +52,7 @@ public struct AppPreferences: Equatable, Sendable {
         defaults.set(fetchLinkPreviews, forKey: Self.fetchLinkPreviewsKey)
         defaults.set(showCapturePulse, forKey: Self.showCapturePulseKey)
         defaults.set(historyLimit, forKey: Self.historyLimitKey)
+        defaults.set(alwaysPastePlainText, forKey: Self.alwaysPastePlainTextKey)
     }
 }
 

@@ -47,8 +47,8 @@ navigation solves the same problem without capping what you can reach.
 - The preview pane shows the selection's **complete** content. Row summaries still
   use the collapsed 200-character `previewText`, but the pane loads the full retained
   payload off-main so long text and code keep their line structure.
-- Filters moved from a sidebar to ⌘1–⌘6 plus a compact menu, returning that width
-  to content.
+- Filters moved from a sidebar to ⌥1–⌥6 plus a compact menu, returning that width
+  to content. ⌘1–⌘9 belongs to the rows: it pastes the Nth visible clip outright.
 - Selection uses the accent colour with a leading marker. In a keyboard-driven
   picker the selected row must be identifiable without hunting.
 - Escape narrows before it closes: clear the query, then reset the scope, then

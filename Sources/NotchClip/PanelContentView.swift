@@ -22,6 +22,8 @@ struct PanelRootView: View {
     @Bindable var visualState: PanelVisualState
     var dragController: HistoryDragController
     var onSelect: () -> Void
+    /// The ⇧⏎ paste: strips formatting, or keeps it when the preference already strips.
+    var onSelectAlternate: () -> Void
     var onEscape: () -> Void
     var onBeginDrag: () -> Void
     var onEndDrag: () -> Void
@@ -30,6 +32,11 @@ struct PanelRootView: View {
     @FocusState private var searchFocused: Bool
 
     private var motionReduced: Bool { reduceMotion || visualState.reduceMotion }
+
+    /// ⇧⏎ pastes with formatting once the preference makes plain the default.
+    private var alternatePasteTitle: String {
+        history.preferences.alwaysPastePlainText ? "Paste with Formatting" : "Paste as Plain Text"
+    }
 
     private var selectedEntry: ClipboardEntry? {
         guard let id = history.selectedID else { return history.projection.visibleEntries.first }
@@ -62,9 +69,11 @@ struct PanelRootView: View {
                 captureError: history.captureError,
                 canPaste: selectedEntry != nil,
                 selectedIsPinned: selectedEntry?.isPinned ?? false,
+                alternatePasteTitle: alternatePasteTitle,
                 scope: $history.scope,
                 onDismissError: history.clearCaptureError,
                 onPaste: onSelect,
+                onPasteAlternate: onSelectAlternate,
                 onPin: {
                     guard let entry = selectedEntry else { return }
                     history.togglePin(id: entry.id)
@@ -158,6 +167,8 @@ struct PanelRootView: View {
                     entry: selectedEntry,
                     preview: selectedEntry.flatMap { history.previewCache[$0.id] },
                     fullText: selectedEntry.flatMap { history.fullTextCache[$0.id] },
+                    alternatePasteTitle: alternatePasteTitle,
+                    onPasteAlternate: onSelectAlternate,
                     onPin: {
                         guard let entry = selectedEntry else { return }
                         history.togglePin(id: entry.id)
@@ -255,6 +266,7 @@ struct PanelRootView: View {
             isSelected: history.selectedID == entry.id,
             dragController: dragController,
             reduceMotion: motionReduced,
+            alternatePasteTitle: alternatePasteTitle,
             onSelect: {
                 history.selectedID = entry.id
                 history.requestFullTextForSelection()
@@ -262,6 +274,10 @@ struct PanelRootView: View {
             onPaste: {
                 history.selectedID = entry.id
                 onSelect()
+            },
+            onPasteAlternate: {
+                history.selectedID = entry.id
+                onSelectAlternate()
             },
             onPin: { history.togglePin(id: entry.id) },
             onDelete: { history.delete(id: entry.id) },
@@ -285,9 +301,10 @@ private struct ScopePicker: View {
                 } label: {
                     Label(option.title, systemImage: option.systemImage)
                 }
+                // ⌥, not ⌘ — ⌘1–⌘9 pastes the Nth visible row.
                 .keyboardShortcut(
                     KeyEquivalent(Character("\(option.shortcutNumber)")),
-                    modifiers: [.command]
+                    modifiers: [.option]
                 )
             }
         } label: {
@@ -317,7 +334,7 @@ private struct ScopePicker: View {
         .menuIndicator(.hidden)
         .fixedSize()
         .accessibilityLabel("Filter: \(scope.title)")
-        .help("Filter clips (⌘1–⌘6)")
+        .help("Filter clips (⌥1–⌥6)")
     }
 }
 
@@ -350,8 +367,10 @@ private struct ClipRow: View {
     let isSelected: Bool
     var dragController: HistoryDragController
     let reduceMotion: Bool
+    let alternatePasteTitle: String
     var onSelect: () -> Void
     var onPaste: () -> Void
+    var onPasteAlternate: () -> Void
     var onPin: () -> Void
     var onDelete: () -> Void
     var onAppear: () -> Void
@@ -422,6 +441,7 @@ private struct ClipRow: View {
         .onDisappear(perform: onDisappear)
         .contextMenu {
             Button("Paste into Previous App", systemImage: "arrow.turn.down.left", action: onPaste)
+            Button(alternatePasteTitle, systemImage: "textformat", action: onPasteAlternate)
             Button(row.isPinned ? "Unpin" : "Pin", systemImage: row.isPinned ? "pin.slash" : "pin", action: onPin)
             Divider()
             Button("Delete", systemImage: "trash", role: .destructive, action: onDelete)
@@ -431,6 +451,7 @@ private struct ClipRow: View {
         .accessibilityHint("Press Return to paste this item into the previous app")
         .accessibilityAddTraits(isSelected ? [.isSelected, .isButton] : .isButton)
         .accessibilityAction(named: "Paste", onPaste)
+        .accessibilityAction(named: alternatePasteTitle, onPasteAlternate)
         .accessibilityAction(named: row.isPinned ? "Unpin" : "Pin", onPin)
         .accessibilityAction(named: "Delete", onDelete)
     }
@@ -498,6 +519,8 @@ private struct ClipPreviewPane: View {
     let entry: ClipboardEntry?
     let preview: EntryPreview?
     let fullText: String?
+    var alternatePasteTitle: String = "Paste as Plain Text"
+    var onPasteAlternate: () -> Void = {}
     var onPin: () -> Void = {}
     var onCopy: () -> Void = {}
     var onDelete: () -> Void = {}
@@ -578,6 +601,14 @@ private struct ClipPreviewPane: View {
                         withAnimation(.easeOut(duration: 0.2)) { showCopied = false }
                     }
                 }
+            )
+            // Sits next to Delete, not next to Copy: like Delete and unlike the
+            // buttons before it, this one closes the panel and acts elsewhere.
+            PaneActionButton(
+                systemImage: "textformat",
+                label: alternatePasteTitle,
+                shortcutHint: "⇧↵",
+                action: onPasteAlternate
             )
             PaneActionButton(
                 systemImage: "trash",
@@ -735,9 +766,11 @@ private struct PanelFooter: View {
     let captureError: String?
     let canPaste: Bool
     var selectedIsPinned: Bool = false
+    var alternatePasteTitle: String = "Paste as Plain Text"
     @Binding var scope: ClipScope
     let onDismissError: () -> Void
     let onPaste: () -> Void
+    var onPasteAlternate: () -> Void = {}
     var onPin: () -> Void = {}
     var onCopy: () -> Void = {}
     var onDelete: () -> Void = {}
@@ -766,12 +799,17 @@ private struct PanelFooter: View {
                 Text(countLabel)
                     .font(.system(size: 11))
                     .foregroundStyle(NotchClipDesign.tertiaryText)
+                    .lineLimit(1)
             }
 
             Spacer(minLength: 8)
 
             PanelHint(key: "↑↓", label: "Move")
             PanelHint(key: "↵", label: "Paste")
+            // Per-row ⌘N badges meant tracking ⌘ and re-rendering the whole list
+            // on every modifier press; one quiet footer hint teaches the same thing.
+            PanelHint(key: "⇧↵", label: "Plain")
+            PanelHint(key: "⌘1–9", label: "Row")
             actionsMenu
         }
         .padding(.horizontal, PanelLayout.footerPadding)
@@ -785,6 +823,8 @@ private struct PanelFooter: View {
         Menu {
             Button("Paste into Previous App", systemImage: "arrow.turn.down.left", action: onPaste)
                 .disabled(!canPaste)
+            Button(alternatePasteTitle, systemImage: "textformat", action: onPasteAlternate)
+                .disabled(!canPaste)
             Button(
                 selectedIsPinned ? "Unpin" : "Pin",
                 systemImage: selectedIsPinned ? "pin.slash" : "pin",
@@ -796,7 +836,7 @@ private struct PanelFooter: View {
 
             Divider()
 
-            // The old "⌘1–6 Filter" keycap lived here; the filter is now a
+            // The old "⌥1–6 Filter" keycap lived here; the filter is now a
             // submenu so the footer teaches the shortcuts in context.
             Picker("Filter", selection: $scope) {
                 ForEach(ClipScope.allCases) { option in
@@ -836,6 +876,7 @@ private struct PanelFooter: View {
         .fixedSize()
         .accessibilityLabel("Actions for the selected clip")
         .help("Paste, pin, copy, filter, or delete")
+        .accessibilityHint("Press Command-1 through Command-9 to paste a visible row by its position")
     }
 
     private var countLabel: String {

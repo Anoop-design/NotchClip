@@ -132,6 +132,15 @@ struct SettingsView: View {
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
+                Toggle(isOn: Binding(
+                    get: { history.preferences.alwaysPastePlainText },
+                    set: { history.setAlwaysPastePlainText($0) }
+                )) {
+                    Text("Always paste as plain text")
+                }
+                Text("Drops rich text, HTML, and styling when you paste. Shift–Return does the opposite of this setting, so the other kind of paste is always one key away.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
             }
             Section("Capture") {
                 Toggle(isOn: Binding(

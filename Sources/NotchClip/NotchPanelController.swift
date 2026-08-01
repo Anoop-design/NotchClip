@@ -438,7 +438,7 @@ final class NotchPanelController: NSObject, NSWindowDelegate {
         visualState.requestSearchFocus()
     }
 
-    private func handleSelectionCopy() {
+    private func handleSelectionCopy(shiftHeld: Bool = false) {
         if isDragging { return }
         // Repeated Return while an operation is active is ignored.
         if activeSelectionOperation != nil || history.isPasteInFlight { return }
@@ -453,7 +453,10 @@ final class NotchPanelController: NSObject, NSWindowDelegate {
         let capturedOpen = openGeneration
         activeSelectionOperation = opToken
 
-        let started = history.paste(entryID: selectedID) { [weak self] written, error in
+        let started = history.paste(
+            entryID: selectedID,
+            plainText: history.usesPlainText(shiftHeld: shiftHeld)
+        ) { [weak self] written, error in
             guard let self else { return }
             let apply = SelectionCopyCompletionPolicy.shouldApplyCompletion(
                 operationToken: opToken,
@@ -565,6 +568,9 @@ final class NotchPanelController: NSObject, NSWindowDelegate {
             dragController: dragController,
             onSelect: { [weak self] in
                 self?.handleSelectionCopy()
+            },
+            onSelectAlternate: { [weak self] in
+                self?.handleSelectionCopy(shiftHeld: true)
             },
             onEscape: { [weak self] in
                 guard let self else { return }
@@ -778,6 +784,9 @@ final class NotchPanelController: NSObject, NSWindowDelegate {
             if flags == .command {
                 return self.handleCommandKey(event)
             }
+            if flags == .option {
+                return self.handleOptionKey(event)
+            }
             // Anything else with a real modifier belongs to AppKit/SwiftUI.
             if !flags.isEmpty && flags != .shift { return event }
 
@@ -830,9 +839,9 @@ final class NotchPanelController: NSObject, NSWindowDelegate {
                 self.history.selectLast()
                 return nil
 
-            case 36, 76: // Return / keypad Enter
+            case 36, 76: // Return / keypad Enter — ⇧ inverts the plain-text preference.
                 if self.isDragging { return nil }
-                self.handleSelectionCopy()
+                self.handleSelectionCopy(shiftHeld: flags.contains(.shift))
                 return nil
 
             default:
@@ -847,10 +856,17 @@ final class NotchPanelController: NSObject, NSWindowDelegate {
     private func handleCommandKey(_ event: NSEvent) -> NSEvent? {
         let character = event.charactersIgnoringModifiers?.lowercased()
 
-        // ⌘1–⌘6 select a content filter.
-        if let character, let digit = Int(character),
-           let scope = ClipScope.scope(forShortcutNumber: digit) {
-            history.scope = scope
+        // ⌘1–⌘9 paste the Nth visible row outright. Plain digits still type into
+        // the search field, which holds focus for the whole presentation.
+        if let character, let ordinal = Int(character),
+           let entry = history.projection.entry(atOrdinal: ordinal) {
+            // Checked before moving the selection: a repeat while a paste is
+            // already running must not leave the highlight on a row it skipped.
+            guard !isDragging, activeSelectionOperation == nil, !history.isPasteInFlight else {
+                return nil
+            }
+            history.selectedID = entry.id
+            handleSelectionCopy()
             return nil
         }
 
@@ -872,6 +888,17 @@ final class NotchPanelController: NSObject, NSWindowDelegate {
         default:
             return event
         }
+    }
+
+    /// ⌥1–⌥6 select a content filter; ⌘1–⌘9 now paste by row position.
+    private func handleOptionKey(_ event: NSEvent) -> NSEvent? {
+        // Option remaps typed characters (⌥1 → "¡"), so read the un-modified key.
+        guard let digit = Int(event.charactersIgnoringModifiers ?? ""),
+              let scope = ClipScope.scope(forShortcutNumber: digit) else {
+            return event
+        }
+        history.scope = scope
+        return nil
     }
 
     private func removeMonitors() {

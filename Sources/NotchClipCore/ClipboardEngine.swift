@@ -138,6 +138,24 @@ public struct PasteboardWriter: Sendable {
         return ok ? items.count : 0
     }
 
+    /// Write one string as the sole pasteboard content (no RTF, HTML, or attachments).
+    @discardableResult
+    public func writePlainText(
+        _ string: String,
+        pasteboard: NSPasteboard = .general
+    ) -> Int {
+        let item = NSPasteboardItem()
+        var any = false
+        for type in PlainTextPastePolicy.outputTypeIdentifiers {
+            if item.setString(string, forType: NSPasteboard.PasteboardType(type)) {
+                any = true
+            }
+        }
+        guard any else { return 0 }
+        pasteboard.clearContents()
+        return pasteboard.writeObjects([item]) ? 1 : 0
+    }
+
     @discardableResult
     public func write(
         representations: [ParsedRepresentation],
@@ -760,5 +778,41 @@ public final class ClipboardEngine: @unchecked Sendable {
             suppressedChangeCount = pasteboard.changeCount
         }
         return written
+    }
+
+    /// Write only the entry's plain-text form, dropping RTF / HTML / attachments.
+    /// Kinds with no plain-text form (images, file lists) are written normally, so
+    /// the shortcut can never leave the clipboard empty.
+    @discardableResult
+    public func pastePlainText(
+        entry: ClipboardEntry,
+        pasteboard: NSPasteboard = .general
+    ) throws -> Int {
+        operationLock.lock()
+        defer { operationLock.unlock() }
+        let written = try writePlainTextLocked(entry: entry, pasteboard: pasteboard)
+        if written > 0 {
+            suppressedChangeCount = pasteboard.changeCount
+        }
+        return written
+    }
+
+    private func writePlainTextLocked(
+        entry: ClipboardEntry,
+        pasteboard: NSPasteboard
+    ) throws -> Int {
+        guard case .plainText(let sourceType) = PlainTextPastePolicy.decision(for: entry),
+              let ref = entry.payloadRefs.first(where: {
+                  $0.typeIdentifier == sourceType && !$0.relativePath.isEmpty
+              }) else {
+            return try writer.write(entry: entry, payloadStore: payloadStore, pasteboard: pasteboard)
+        }
+        let data = try payloadStore.loadData(for: ref)
+        guard let string = PlainTextPastePolicy.plainString(from: data, typeIdentifier: sourceType),
+              !string.isEmpty else {
+            // Decoded to nothing — a formatted paste beats an empty clipboard.
+            return try writer.write(entry: entry, payloadStore: payloadStore, pasteboard: pasteboard)
+        }
+        return writer.writePlainText(string, pasteboard: pasteboard)
     }
 }
