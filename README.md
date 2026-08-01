@@ -1,6 +1,6 @@
 # NotchClip
 
-Personal macOS clipboard history. Control–V morphs the MacBook notch into a translucent, Dynamic-Island-style panel holding your entire searchable history (macOS 14+).
+Personal macOS clipboard history. Control–V (or any shortcut you record in Settings) morphs the MacBook notch into a translucent, Dynamic-Island-style panel holding your entire searchable history (macOS 14+).
 
 ## Requirements
 
@@ -76,7 +76,7 @@ containing the entire searchable history — there is no second window.
 
 | Action | Behavior |
 |--------|----------|
-| **Control–V** | Global hotkey toggles the clipboard panel (Carbon exclusive registration) |
+| **Control–V** | Global hotkey toggles the clipboard panel (Carbon exclusive registration). Re-recordable in Settings › General › Shortcut; Reset to Default restores Control–V. |
 | **Menu bar** | NotchClip menu: Show Clipboard, Pause/Resume, Settings, Quit |
 | **Search** | The search field holds focus for the whole presentation — just type to filter. Command–F returns focus to it. |
 | **List** | The complete history, sectioned into Pinned, Today, Yesterday, and Earlier. Up/Down move, Page Up/Down jump, Home/End go to the ends. |
@@ -144,7 +144,7 @@ On first launch, NotchClip shows a one-time explanation before asking macOS for 
 
 - **Native architecture only** — the local path uses an ad-hoc signature; the release path supports Developer ID, notarization, stapling, and Gatekeeper validation.  
 - A polished drag-to-Applications DMG workflow and custom app icon are included. A real notarized artifact still requires the developer certificate and notary credentials described above.  
-- **No configurable global shortcut** yet (Control–V is fixed). See [docs/UX_AUDIT.md](docs/UX_AUDIT.md) for the full gap list.
+- See [docs/UX_AUDIT.md](docs/UX_AUDIT.md) for the full gap list.
 - GUI automation / interactive GUI tests are not part of the package test suite.  
 - The current atomic JSON history store is appropriate for a personal v1, but an indexed SQLite/FTS migration is planned before histories reach many thousands of entries.
 - Copies distributed to other Macs will require Developer ID signing and notarization for normal Gatekeeper acceptance.

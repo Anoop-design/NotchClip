@@ -33,6 +33,16 @@ final class AppCoordinator: NSObject {
         storageError == nil ? "clipboard" : "exclamationmark.triangle"
     }
 
+    /// The last shortcut that registered successfully; preferences are only
+    /// written after registration, so this is always a working binding.
+    var hotKeyBinding: NotchClipHotKeyBinding {
+        history.preferences.hotKey
+    }
+
+    var hotKeyDescription: HotKeyDescription {
+        HotKeyKeyLabels.description(for: hotKeyBinding)
+    }
+
     init(hotKey: (any HotKeyRegistering)? = nil) {
         let accessibility = AccessibilityPermissionState(
             dispatchReadinessCheck: { AccessibilityAuthorization.ensureReadyToPostEvents() }
@@ -46,6 +56,9 @@ final class AppCoordinator: NSObject {
         super.init()
         accessibilityOnboarding.onPermissionGranted = { [weak self] in
             self?.clearPermissionPasteErrorIfNeeded()
+        }
+        accessibilityOnboarding.hotKeyDescription = { [weak self] in
+            self?.hotKeyDescription ?? .default
         }
     }
 
@@ -187,10 +200,56 @@ final class AppCoordinator: NSObject {
         hotKey.onToggle = { [weak self] in
             self?.toggleClipboardPanel()
         }
-        if !hotKey.register() {
-            hotKeyError = hotKey.registrationError ?? "Failed to register \(NotchClipHotKey.humanReadableName)."
+        if !hotKey.register(history.preferences.hotKey) {
+            hotKeyError = hotKey.registrationError ?? "Failed to register the shortcut."
         } else {
             hotKeyError = nil
+        }
+    }
+
+    /// Swap the global shortcut. The previous binding stays registered unless
+    /// the new one takes its place, and only a registered binding is persisted.
+    @discardableResult
+    func applyHotKeyBinding(_ binding: NotchClipHotKeyBinding) -> Bool {
+        let previous = history.preferences.hotKey
+        if let failure = NotchClipHotKeyValidation.failure(for: binding) {
+            hotKeyError = NotchClipHotKeyValidation.message(for: failure)
+            // Recording suspends the live registration, so a rejection here
+            // must not leave the app with no shortcut at all.
+            if !hotKey.isRegistered {
+                _ = hotKey.register(previous)
+            }
+            return false
+        }
+        if hotKey.register(binding) {
+            history.setHotKey(binding)
+            hotKeyError = nil
+            return true
+        }
+        let failureMessage = hotKey.registrationError ?? "That shortcut is in use by another app."
+        _ = hotKey.register(previous)
+        hotKeyError = failureMessage
+        return false
+    }
+
+    @discardableResult
+    func resetHotKeyToDefault() -> Bool {
+        applyHotKeyBinding(NotchClipHotKey.defaultBinding)
+    }
+
+    /// An exclusive Carbon registration consumes its own combo before any local
+    /// NSEvent monitor sees it, so the recorder could never capture the shortcut
+    /// already in use. Stand the registration down for the duration.
+    func beginHotKeyRecording() {
+        hotKey.unregister()
+    }
+
+    func endHotKeyRecording() {
+        guard !hotKey.isRegistered else { return }
+        if hotKey.register(history.preferences.hotKey) {
+            hotKeyError = nil
+        } else {
+            hotKeyError = hotKey.registrationError ?? "Failed to register the shortcut."
         }
     }
 

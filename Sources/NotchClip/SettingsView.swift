@@ -8,9 +8,14 @@ struct SettingsView: View {
     @Bindable var launchAtLogin: LaunchAtLoginController
     var hotKeyError: String?
     var isHotKeyRegistered: Bool
+    var hotKeyBinding: NotchClipHotKeyBinding
     var isPaused: Bool
     var onTogglePause: () -> Void
     var onSetUpAccessibility: () -> Void
+    var onRecordHotKey: (NotchClipHotKeyBinding) -> Void
+    var onResetHotKey: () -> Void
+    var onBeginHotKeyRecording: () -> Void
+    var onEndHotKeyRecording: () -> Void
 
     @State private var confirmClearUnpinned = false
     @State private var confirmClearAll = false
@@ -70,9 +75,23 @@ struct SettingsView: View {
         Form {
             Section("Shortcut") {
                 LabeledContent("Show Clipboard") {
-                    NotchClipKeycap("⌃V")
-                        .accessibilityLabel(NotchClipHotKey.displayName)
+                    HStack(spacing: 10) {
+                        HotKeyRecorderField(
+                            binding: hotKeyBinding,
+                            onRecord: onRecordHotKey,
+                            onBeginRecording: onBeginHotKeyRecording,
+                            onEndRecording: onEndHotKeyRecording
+                        )
+                        Button("Reset to Default") {
+                            onResetHotKey()
+                        }
+                        .controlSize(.small)
+                        .disabled(hotKeyBinding == NotchClipHotKey.defaultBinding)
+                    }
                 }
+                Text("Click the shortcut, then press the keys you want. Include Control, Option, or Command so it never interrupts typing.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
                 if let hotKeyError {
                     Label(hotKeyError, systemImage: "exclamationmark.circle.fill")
                         .foregroundStyle(NotchClipDesign.warning)

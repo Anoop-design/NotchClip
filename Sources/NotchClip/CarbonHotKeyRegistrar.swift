@@ -3,11 +3,12 @@ import AppKit
 import Carbon
 import NotchClipCore
 
-/// Carbon `RegisterEventHotKey` for the shared NotchClip shortcut with exclusive registration.
+/// Carbon `RegisterEventHotKey` for the user's NotchClip shortcut with exclusive registration.
 /// One logical toggle per physical press/release pair.
 final class CarbonHotKeyRegistrar: HotKeyRegistering {
     private(set) var isRegistered: Bool = false
     private(set) var registrationError: String?
+    private(set) var binding: NotchClipHotKeyBinding = NotchClipHotKey.defaultBinding
     var onToggle: (() -> Void)?
 
     private var hotKeyRef: EventHotKeyRef?
@@ -22,8 +23,9 @@ final class CarbonHotKeyRegistrar: HotKeyRegistering {
     }
 
     @discardableResult
-    func register() -> Bool {
+    func register(_ binding: NotchClipHotKeyBinding) -> Bool {
         unregister()
+        self.binding = binding
 
         var eventTypes: [EventTypeSpec] = [
             EventTypeSpec(
@@ -57,8 +59,8 @@ final class CarbonHotKeyRegistrar: HotKeyRegistering {
             return false
         }
 
-        let modifiers = carbonModifiers
-        let keyCode = UInt32(kVK_ANSI_V)
+        let modifiers = carbonModifiers(for: binding.modifiers)
+        let keyCode = UInt32(binding.keyCode)
         // Exclusive: conflict with another exclusive registration → eventHotKeyExistsErr.
         let options = UInt32(kEventHotKeyExclusive)
         let registerStatus = RegisterEventHotKey(
@@ -74,10 +76,11 @@ final class CarbonHotKeyRegistrar: HotKeyRegistering {
                 RemoveEventHandler(handlerRef)
                 self.handlerRef = nil
             }
+            let name = HotKeyKeyLabels.description(for: binding).symbolic
             if registerStatus == OSStatus(eventHotKeyExistsErr) {
-                registrationError = "\(NotchClipHotKey.humanReadableName) is already registered exclusively by another application."
+                registrationError = "\(name) is in use by another app. Pick a different shortcut."
             } else {
-                registrationError = "Failed to register \(NotchClipHotKey.humanReadableName) (status \(registerStatus))."
+                registrationError = "Failed to register \(name) (status \(registerStatus))."
             }
             isRegistered = false
             return false
@@ -120,8 +123,8 @@ final class CarbonHotKeyRegistrar: HotKeyRegistering {
         }
     }
 
-    private var carbonModifiers: UInt32 {
-        NotchClipHotKey.modifiers.reduce(into: UInt32(0)) { flags, modifier in
+    private func carbonModifiers(for modifiers: Set<NotchClipHotKeyModifier>) -> UInt32 {
+        modifiers.reduce(into: UInt32(0)) { flags, modifier in
             switch modifier {
             case .command:
                 flags |= UInt32(cmdKey)

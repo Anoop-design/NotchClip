@@ -22,9 +22,14 @@ struct NotchClipApp: App {
                 launchAtLogin: coordinator.launchAtLogin,
                 hotKeyError: coordinator.hotKeyError,
                 isHotKeyRegistered: coordinator.hotKey.isRegistered,
+                hotKeyBinding: coordinator.hotKeyBinding,
                 isPaused: coordinator.isPaused,
                 onTogglePause: { coordinator.togglePause() },
-                onSetUpAccessibility: { coordinator.presentAccessibilitySetup() }
+                onSetUpAccessibility: { coordinator.presentAccessibilitySetup() },
+                onRecordHotKey: { coordinator.applyHotKeyBinding($0) },
+                onResetHotKey: { coordinator.resetHotKeyToDefault() },
+                onBeginHotKeyRecording: { coordinator.beginHotKeyRecording() },
+                onEndHotKeyRecording: { coordinator.endHotKeyRecording() }
             )
         }
     }
@@ -58,14 +63,7 @@ struct NotchClipApp: App {
                 .foregroundStyle(.secondary)
         }
 
-        Button("Show Clipboard") {
-            coordinator.toggleClipboardPanel()
-        }
-        .keyboardShortcut(
-            KeyEquivalent(NotchClipHotKey.key),
-            modifiers: menuShortcutModifiers
-        )
-        .disabled(coordinator.storageError != nil)
+        showClipboardButton
 
         Button("All Clips…") {
             coordinator.openClipboardLibrary()
@@ -101,8 +99,24 @@ struct NotchClipApp: App {
         .keyboardShortcut("q", modifiers: [.command])
     }
 
+    /// Keys with no single-character equivalent (arrows, Space, F-keys) simply
+    /// get no menu equivalent; the Carbon registration still drives them.
+    @ViewBuilder
+    private var showClipboardButton: some View {
+        let button = Button("Show Clipboard") {
+            coordinator.toggleClipboardPanel()
+        }
+        .disabled(coordinator.storageError != nil)
+
+        if let equivalent = HotKeyKeyLabels.keyEquivalent(for: coordinator.hotKeyBinding.keyCode) {
+            button.keyboardShortcut(equivalent, modifiers: menuShortcutModifiers)
+        } else {
+            button
+        }
+    }
+
     private var menuShortcutModifiers: EventModifiers {
-        NotchClipHotKey.modifiers.reduce(into: EventModifiers()) { modifiers, modifier in
+        coordinator.hotKeyBinding.modifiers.reduce(into: EventModifiers()) { modifiers, modifier in
             switch modifier {
             case .command:
                 modifiers.insert(.command)

@@ -20,6 +20,7 @@ struct ProductOnboardingView: View {
     let onEnable: () -> Void
     let onOpenSettings: () -> Void
     let onDone: () -> Void
+    let hotKey: HotKeyDescription
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
@@ -38,12 +39,14 @@ struct ProductOnboardingView: View {
         onEnable: @escaping () -> Void,
         onOpenSettings: @escaping () -> Void,
         onDone: @escaping () -> Void,
+        hotKey: HotKeyDescription = .default,
         startsAtPermission: Bool = false
     ) {
         self.state = state
         self.onEnable = onEnable
         self.onOpenSettings = onOpenSettings
         self.onDone = onDone
+        self.hotKey = hotKey
         _step = State(initialValue: startsAtPermission ? .permission : .welcome)
     }
 
@@ -156,7 +159,8 @@ struct ProductOnboardingView: View {
             OnboardingNotchHero(
                 isExpanded: heroExpanded,
                 reduceMotion: reduceMotion,
-                reduceTransparency: reduceTransparency
+                reduceTransparency: reduceTransparency,
+                hotKeySymbol: hotKey.symbolic
             )
             .frame(width: 552, height: 152)
 
@@ -167,7 +171,7 @@ struct ProductOnboardingView: View {
                     .multilineTextAlignment(.center)
                     .accessibilityAddTraits(.isHeader)
 
-                Text("Copy text, links, images, or files. Press Control–V to bring them back without leaving your current app.")
+                Text("Copy text, links, images, or files. Press \(hotKey.prose) to bring them back without leaving your current app.")
                     .font(.system(size: 15, weight: .regular))
                     .foregroundStyle(NotchClipDesign.secondaryText)
                     .multilineTextAlignment(.center)
@@ -197,8 +201,8 @@ struct ProductOnboardingView: View {
                 .font(.system(size: 11, weight: .semibold))
                 .accessibilityHidden(true)
 
-            NotchClipKeycap("⌃V")
-                .accessibilityLabel("Control V")
+            NotchClipKeycap(hotKey.symbolic)
+                .accessibilityLabel(hotKey.spoken)
 
             Image(systemName: "chevron.right")
                 .font(.system(size: 11, weight: .semibold))
@@ -209,7 +213,7 @@ struct ProductOnboardingView: View {
         .font(.system(size: 13, weight: .medium))
         .foregroundStyle(NotchClipDesign.secondaryText)
         .accessibilityElement(children: .combine)
-        .accessibilityLabel("Copy anything, press Control V, then click to paste or drag")
+        .accessibilityLabel("Copy anything, press \(hotKey.spoken), then click to paste or drag")
     }
 
     private var permissionPage: some View {
@@ -411,7 +415,7 @@ struct ProductOnboardingView: View {
 
     private var permissionSubtitle: String {
         if state.isGranted {
-            return "Press Control–V, choose a clip, and keep moving."
+            return "Press \(hotKey.prose), choose a clip, and keep moving."
         }
         return "Accessibility lets NotchClip press Command–V only after you choose a clip."
     }
@@ -586,6 +590,7 @@ private struct OnboardingNotchHero: View {
     let isExpanded: Bool
     let reduceMotion: Bool
     let reduceTransparency: Bool
+    let hotKeySymbol: String
 
     var body: some View {
         ZStack(alignment: .top) {
@@ -617,7 +622,7 @@ private struct OnboardingNotchHero: View {
 
                 Spacer()
 
-                NotchClipKeycap("⌃V")
+                NotchClipKeycap(hotKeySymbol)
             }
             .frame(height: 28)
 

@@ -225,6 +225,13 @@ final class HistoryModel {
         preferences.save()
     }
 
+    /// Only called once a shortcut has actually registered, so a rejected
+    /// binding never survives a relaunch.
+    func setHotKey(_ binding: NotchClipHotKeyBinding) {
+        preferences.hotKey = binding
+        preferences.save()
+    }
+
     /// Whether a paste performed with `shiftHeld` should strip formatting.
     func usesPlainText(shiftHeld: Bool) -> Bool {
         PlainTextPastePolicy.usesPlainText(

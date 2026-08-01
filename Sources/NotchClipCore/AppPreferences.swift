@@ -10,22 +10,27 @@ public struct AppPreferences: Equatable, Sendable {
     public var historyLimit: Int
     /// When on, a plain paste strips formatting and ⇧ pastes with it instead.
     public var alwaysPastePlainText: Bool
+    /// The global shortcut that shows the clipboard.
+    public var hotKey: NotchClipHotKeyBinding
 
     public static let fetchLinkPreviewsKey = "com.anoop.notchclip.fetchLinkPreviews"
     public static let showCapturePulseKey = "com.anoop.notchclip.showCapturePulse"
     public static let historyLimitKey = "com.anoop.notchclip.historyLimit"
     public static let alwaysPastePlainTextKey = "com.anoop.notchclip.alwaysPastePlainText"
+    public static let hotKeyKey = "com.anoop.notchclip.hotKey"
 
     public init(
         fetchLinkPreviews: Bool = true,
         showCapturePulse: Bool = false,
         historyLimit: Int = RetentionPolicy.defaultLimit,
-        alwaysPastePlainText: Bool = false
+        alwaysPastePlainText: Bool = false,
+        hotKey: NotchClipHotKeyBinding = NotchClipHotKey.defaultBinding
     ) {
         self.fetchLinkPreviews = fetchLinkPreviews
         self.showCapturePulse = showCapturePulse
         self.historyLimit = historyLimit
         self.alwaysPastePlainText = alwaysPastePlainText
+        self.hotKey = hotKey
     }
 
     public static func load(defaults: UserDefaults = .standard) -> AppPreferences {
@@ -40,11 +45,15 @@ public struct AppPreferences: Equatable, Sendable {
             : defaults.integer(forKey: historyLimitKey)
         // Absent key means the default (off); bool(forKey:) already returns false.
         let alwaysPastePlainText = defaults.bool(forKey: alwaysPastePlainTextKey)
+        // Absent or corrupt encoding falls back to the shipped default.
+        let hotKey = NotchClipHotKeyBinding.decode(defaults.string(forKey: hotKeyKey))
+            ?? NotchClipHotKey.defaultBinding
         return AppPreferences(
             fetchLinkPreviews: fetchLinkPreviews,
             showCapturePulse: showCapturePulse,
             historyLimit: historyLimit,
-            alwaysPastePlainText: alwaysPastePlainText
+            alwaysPastePlainText: alwaysPastePlainText,
+            hotKey: hotKey
         )
     }
 
@@ -53,6 +62,7 @@ public struct AppPreferences: Equatable, Sendable {
         defaults.set(showCapturePulse, forKey: Self.showCapturePulseKey)
         defaults.set(historyLimit, forKey: Self.historyLimitKey)
         defaults.set(alwaysPastePlainText, forKey: Self.alwaysPastePlainTextKey)
+        defaults.set(hotKey.encoded, forKey: Self.hotKeyKey)
     }
 }
 

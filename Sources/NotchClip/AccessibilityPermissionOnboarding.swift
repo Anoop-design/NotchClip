@@ -260,6 +260,8 @@ final class AccessibilityPermissionOnboardingController: NSObject, NSWindowDeleg
     private var window: NSWindow?
     private var closeReason: CloseReason = .userDismissed
     var onPermissionGranted: (() -> Void)?
+    /// Supplied by `AppCoordinator` so onboarding copy names the live shortcut.
+    var hotKeyDescription: @MainActor () -> HotKeyDescription = { .default }
 
     init(
         state: AccessibilityPermissionState,
@@ -350,6 +352,7 @@ final class AccessibilityPermissionOnboardingController: NSObject, NSWindowDeleg
             onDone: { [weak self] in
                 self?.finishOnboarding()
             },
+            hotKey: hotKeyDescription(),
             startsAtPermission: startsAtPermission
         )
 

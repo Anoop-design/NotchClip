@@ -311,11 +311,13 @@ final class DismissPolicyTests: XCTestCase {
 }
 
 final class HotKeySeamTests: XCTestCase {
-    func testDefaultShortcutIdentityIsControlVOnly() {
+    func testFactoryShortcutIdentityIsControlV() {
         XCTAssertEqual(NotchClipHotKey.key, "v")
         XCTAssertEqual(NotchClipHotKey.modifiers, [.control])
         XCTAssertEqual(NotchClipHotKey.displayName, "⌃V")
         XCTAssertEqual(NotchClipHotKey.accessibilityName, "Control-V")
+        XCTAssertEqual(NotchClipHotKey.defaultBinding.keyCode, NotchClipHotKey.defaultKeyCode)
+        XCTAssertEqual(NotchClipHotKey.defaultBinding.modifiers, NotchClipHotKey.modifiers)
     }
 
     func testFakeRegisterUnregisterAndToggle() {
@@ -340,10 +342,7 @@ final class HotKeySeamTests: XCTestCase {
         fake.shouldFailRegistration = true
         XCTAssertFalse(fake.register())
         XCTAssertFalse(fake.isRegistered)
-        XCTAssertEqual(
-            fake.registrationError,
-            "Hotkey Control–V is already in use by another application."
-        )
+        XCTAssertEqual(fake.registrationError, "That shortcut is in use by another app.")
     }
 }
 
