@@ -9,9 +9,19 @@ final class NotchChromeView: NSView {
 
     @objc dynamic var shellProgress: CGFloat = 0 {
         didSet {
-            shellProgress = min(max(shellProgress, 0), 1)
+            // Ceiling above 1 leaves room for the spring's overshoot.
+            shellProgress = min(max(shellProgress, 0), PanelGeometry.maxShellProgress)
             needsLayout = true
         }
+    }
+
+    /// Content that should track the *resting* shell rect, not the window
+    /// bounds — the window is larger to give overshoot somewhere to go.
+    weak var contentHost: NSView?
+
+    /// The resting shell rect within `bounds`, excluding overshoot headroom.
+    var restingRect: CGRect {
+        PanelGeometry.restingRect(inWindowSized: bounds.size)
     }
 
     var preferOpaque: Bool = false {
@@ -26,8 +36,8 @@ final class NotchChromeView: NSView {
 
     override class func defaultAnimation(forKey key: NSAnimatablePropertyKey) -> Any? {
         if key == "shellProgress" {
-            // The active NSAnimationContext supplies the direction-specific curve so the
-            // frame and shell never receive competing timing functions.
+            // Fallback only. The controller installs a direction-specific
+            // CASpringAnimation via `animations` before each transition.
             return CABasicAnimation()
         }
         return super.defaultAnimation(forKey: key)
@@ -80,11 +90,19 @@ final class NotchChromeView: NSView {
         if maskLayer.frame != bounds { maskLayer.frame = bounds }
         if highlightLayer.frame != bounds { highlightLayer.frame = bounds }
 
+        // Content sits in the resting rect and never moves; only the shell
+        // around it overshoots into the headroom.
+        let resting = restingRect
+        if let contentHost, contentHost.frame != resting {
+            contentHost.frame = resting
+        }
+
         let layout = PanelGeometry.shellLayout(
-            in: bounds,
+            in: resting,
             capWidth: capWidth,
             capHeight: capHeight,
-            progress: shellProgress
+            progress: shellProgress,
+            presentation: attachesToNotch ? .notch : .detached
         )
         let path = shellCGPath(layout: layout, attachesToNotch: attachesToNotch)
         let highlightPath = attachesToNotch
@@ -127,10 +145,10 @@ final class NotchChromeView: NSView {
     ) -> CGPath {
 
         if !attachesToNotch {
-            let radius = min(
-                layout.shellRect.height / 2,
-                15 + 9 * layout.progress
-            )
+            // Detached: a plain rounded rect that scales in place. The radius is
+            // fixed rather than progress-driven so the corners don't visibly
+            // tighten during the scale.
+            let radius = min(layout.bodyCornerRadius, layout.shellRect.height / 2)
             return CGPath(
                 roundedRect: layout.shellRect,
                 cornerWidth: radius,

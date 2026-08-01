@@ -49,6 +49,31 @@ private enum NotchShellTransition {
             return CAMediaTimingFunction(controlPoints: 0.45, 0.0, 0.25, 1.0)
         }
     }
+
+    /// Physical spring for the shell mask — now the *only* curve shaping the
+    /// motion, since `shellLayout` became linear in progress.
+    var springAnimation: CASpringAnimation {
+        let spring = CASpringAnimation(keyPath: "shellProgress")
+        spring.mass = 1
+        switch self {
+        case .expand:
+            // ω₀ = √480 ≈ 21.9 rad/s, ζ = 36/(2ω₀) ≈ 0.82 → peak ≈ 1.012.
+            // Just enough swell to read as weight settling, not as a bounce;
+            // ζ ≈ 0.73 overshot ~3 % and looked like the panel expanded too far
+            // before correcting itself.
+            spring.stiffness = 480
+            spring.damping = 36
+        case .collapse:
+            // ζ ≈ 0.99 — critically damped, the fastest settle with no
+            // overshoot at all. Dismissal should read as decisive; a bounce on
+            // the way out reads as hesitation.
+            spring.stiffness = 560
+            spring.damping = 47
+        }
+        spring.initialVelocity = 0
+        spring.duration = spring.settlingDuration
+        return spring
+    }
 }
 
 /// Retained transparent borderless panel hosting the clipboard UI.
@@ -231,7 +256,7 @@ final class NotchPanelController: NSObject, NSWindowDelegate {
             ? (presentationMetrics ?? currentScreenMetrics())
             : currentScreenMetrics()
         presentationMetrics = metrics
-        let expanded = PanelGeometry.expandedFrame(on: metrics)
+        let expanded = PanelGeometry.windowFrame(on: metrics)
         let plan = AnimationPlanner.plan(reduceMotion: reduceMotion, reduceTransparency: reduceTransparency)
         visualState.capWidth = PanelGeometry.capWidth(on: metrics)
         visualState.capHeight = max(PanelGeometry.compactMinHeight, metrics.topSafeInset > 0 ? metrics.topSafeInset : PanelGeometry.compactMinHeight)
@@ -242,7 +267,11 @@ final class NotchPanelController: NSObject, NSWindowDelegate {
         }
         phase = .compact
         applyChromeMaterial()
-        panel.alphaValue = plan.allowsGeometryAnimation ? 1 : 0
+        // A notched shell is continuous with the housing, so it is opaque from
+        // the first frame. A detached shell has no anchor and must fade in, or
+        // it reads as a rectangle popping into existence.
+        let fadesIn = !plan.allowsGeometryAnimation || !metrics.hasNotch
+        panel.alphaValue = fadesIn ? 0 : 1
         panel.orderFrontRegardless()
         NSApp.activate(ignoringOtherApps: true)
         panel.makeKeyAndOrderFront(nil)
@@ -271,14 +300,25 @@ final class NotchPanelController: NSObject, NSWindowDelegate {
                     self.phase = .expanded
                     self.finishKeyAndFocus()
                 }
-                // Hold the content back until the shell has most of its final
-                // area, then fade in over the remainder. Revealing a list while
-                // the shell is still narrow makes the text look like it is being
-                // squeezed out of the notch.
-                DispatchQueue.main.asyncAfter(deadline: .now() + plan.openDuration * 0.42) { [weak self] in
+                // Content timing is derived from the shell spring's own settling
+                // duration, not from plan.openDuration. Those had drifted apart
+                // once the spring replaced the bezier — the shell arrived while
+                // the text was still fading, which reads as two separate
+                // animations rather than one object opening.
+                //
+                // Starts once the shell has real area, and lands *before* the
+                // spring's final micro-settle so the content is already in place
+                // as the shape stops moving.
+                let shellDuration = NotchShellTransition.expand.springAnimation.settlingDuration
+                if !metrics.hasNotch {
+                    // Fade completes early so the panel is solid while the
+                    // spring is still settling — the scale carries the motion.
+                    self.animatePanelAlpha(to: 1, duration: shellDuration * 0.45) {}
+                }
+                DispatchQueue.main.asyncAfter(deadline: .now() + shellDuration * 0.26) { [weak self] in
                     guard let self else { return }
                     guard TransitionTokenPolicy.shouldApplyOpenCompletion(token: token, openGeneration: self.openGeneration) else { return }
-                    self.animateContentIn(duration: plan.openDuration * 0.58, plan: plan)
+                    self.animateContentIn(duration: shellDuration * 0.52, plan: plan)
                 }
             } else {
                 panel.setFrame(expanded, display: true)
@@ -356,8 +396,15 @@ final class NotchPanelController: NSObject, NSWindowDelegate {
             return
         }
 
+        // Detached shells scale back down; without a matching fade they would
+        // vanish abruptly at their smallest scale instead of dissolving.
+        if !metrics.hasNotch {
+            let collapseDuration = NotchShellTransition.collapse.springAnimation.settlingDuration
+            animatePanelAlpha(to: 0, duration: collapseDuration * 0.85) {}
+        }
+
         self.animate(
-            to: PanelGeometry.expandedFrame(on: metrics),
+            to: PanelGeometry.windowFrame(on: metrics),
             shellProgress: 0,
             duration: plan.closeDuration,
             plan: plan,
@@ -369,6 +416,7 @@ final class NotchPanelController: NSObject, NSWindowDelegate {
             guard TransitionTokenPolicy.shouldApplyCloseCompletion(token: closeToken, closeGeneration: self.closeGeneration) else { return }
 
             self.panel?.orderOut(nil)
+            self.panel?.alphaValue = 1
             self.panel?.setFrame(compact, display: false)
             self.updateShellMask(for: compact.size, metrics: metrics, progress: 0)
             self.phase = .hidden
@@ -531,9 +579,9 @@ final class NotchPanelController: NSObject, NSWindowDelegate {
             onEndDrag: { [weak self] in self?.endDragging() }
         )
         let hosting = NSHostingView(rootView: root)
-        hosting.frame = chrome.bounds
-        hosting.autoresizingMask = [.width, .height]
+        hosting.frame = chrome.restingRect
         chrome.addSubview(hosting)
+        chrome.contentHost = hosting
 
         panel.contentView = chrome
         self.panel = panel
@@ -577,9 +625,12 @@ final class NotchPanelController: NSObject, NSWindowDelegate {
             // Keep the transparent hosting window stable and animate only the shell mask.
             // Resizing both the window and the mask multiplies progress and causes a snap.
             panel.setFrame(frame, display: true)
+            // Install the direction-specific spring; AppKit drives shellProgress
+            // through it, overshoot included.
+            let spring = transition.springAnimation
+            chromeView?.animations = ["shellProgress": spring]
             NSAnimationContext.runAnimationGroup({ ctx in
-                ctx.duration = duration
-                ctx.timingFunction = transition.timingFunction
+                ctx.duration = spring.settlingDuration
                 self.chromeView?.animator().shellProgress = shellProgress
             }, completionHandler: { [weak self] in
                 Task { @MainActor in
@@ -629,9 +680,9 @@ final class NotchPanelController: NSObject, NSWindowDelegate {
 
     private func animateContentIn(duration: TimeInterval, plan: AnimationPlan) {
         visualState.contentScale = 1
-        let animation: Animation = plan.allowsGeometryAnimation
-            ? .easeOut(duration: min(0.22, duration))
-            : .easeOut(duration: duration)
+        // No ceiling: the caller derives this from the shell spring, and
+        // clamping it here is what let the two drift out of step.
+        let animation: Animation = .easeOut(duration: duration)
         withAnimation(animation) {
             visualState.contentOpacity = 1
             visualState.contentScale = 1
@@ -666,7 +717,7 @@ final class NotchPanelController: NSObject, NSWindowDelegate {
         }
         let frame = (phase == .compact)
             ? PanelGeometry.compactFrame(on: metrics)
-            : PanelGeometry.expandedFrame(on: metrics)
+            : PanelGeometry.windowFrame(on: metrics)
         panel.setFrame(frame, display: true)
         updateShellMask(for: frame.size, metrics: metrics, progress: phase == .compact ? 0 : 1)
     }
@@ -843,7 +894,13 @@ final class NotchPanelController: NSObject, NSWindowDelegate {
         guard !isDragging, !isQuickLookActive else { return }
         guard let panel else { return }
         let location = NSEvent.mouseLocation
-        if !panel.frame.contains(location) {
+        // The window is larger than the visible shell (overshoot headroom), so
+        // hit-test the resting rect or a click in the margin would be ignored.
+        var visible = panel.frame
+        visible = visible.insetBy(dx: PanelGeometry.overshootHeadroomX, dy: 0)
+        visible.origin.y += PanelGeometry.overshootHeadroomBottom
+        visible.size.height -= PanelGeometry.overshootHeadroomBottom
+        if !visible.contains(location) {
             let gen = openGeneration
             DispatchQueue.main.async { [weak self] in
                 guard let self, self.openGeneration == gen else { return }

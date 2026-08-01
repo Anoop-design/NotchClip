@@ -121,22 +121,126 @@ final class PanelGeometryTests: XCTestCase {
             progress: 2
         )
         XCTAssertEqual(belowZero.progress, 0)
-        XCTAssertEqual(aboveOne.progress, 1)
-    }
+        // Values above 1 are the open spring's overshoot and are allowed up to
+        // maxShellProgress; the window carries headroom so they aren't clipped.
+        XCTAssertEqual(aboveOne.progress, PanelGeometry.maxShellProgress)
+        XCTAssertGreaterThan(PanelGeometry.maxShellProgress, 1)
 
-    func testShellRadiiFollowInterpolatedBodyWithoutDoubleEasing() {
-        let rect = CGRect(x: 0, y: 0, width: 620, height: 236)
-        let midpoint = PanelGeometry.shellLayout(
+        // Overshoot must stay inside the headroom the window actually reserves.
+        let overshot = PanelGeometry.shellLayout(
             in: rect,
             capWidth: 180,
             capHeight: 32,
-            progress: 0.5
+            progress: PanelGeometry.maxShellProgress
         )
+        XCTAssertGreaterThan(overshot.bodyRect.width, rect.width)
+        XCTAssertLessThanOrEqual(
+            (overshot.bodyRect.width - rect.width) / 2,
+            PanelGeometry.overshootHeadroomX
+        )
+        XCTAssertLessThanOrEqual(
+            rect.minY - overshot.bodyRect.minY,
+            PanelGeometry.overshootHeadroomBottom
+        )
+    }
 
+    func testWindowFrameReservesOvershootHeadroomWithoutMovingTheCap() {
+        let screen = ScreenMetrics(
+            frame: CGRect(x: 0, y: 0, width: 1512, height: 982),
+            visibleFrame: CGRect(x: 0, y: 0, width: 1512, height: 944),
+            topSafeInset: 32,
+            notchWidth: 180
+        )
+        let resting = PanelGeometry.expandedFrame(on: screen)
+        let window = PanelGeometry.windowFrame(on: screen)
+
+        // Headroom on the sides and below only — the top stays pinned to the notch.
+        XCTAssertEqual(window.maxY, resting.maxY, accuracy: 0.5)
+        XCTAssertEqual(window.midX, resting.midX, accuracy: 0.5)
+        XCTAssertEqual(window.width - resting.width, PanelGeometry.overshootHeadroomX * 2, accuracy: 0.5)
+        XCTAssertEqual(window.height - resting.height, PanelGeometry.overshootHeadroomBottom, accuracy: 0.5)
+
+        // The resting rect maps back to the same size inside the window.
+        let inner = PanelGeometry.restingRect(inWindowSized: window.size)
+        XCTAssertEqual(inner.width, resting.width, accuracy: 0.5)
+        XCTAssertEqual(inner.height, resting.height, accuracy: 0.5)
+        XCTAssertEqual(inner.maxY, window.height, accuracy: 0.5)
+    }
+
+    /// The spring driving `shellProgress` must be the only motion curve.
+    ///
+    /// The geometry used to apply its own ease-outs on top, whose slope reached
+    /// zero at p = 1 while the overshoot region above 1 passed through at slope
+    /// 1 — a derivative discontinuity that made the shape stall and then lurch
+    /// into the overshoot. Linear geometry is what keeps that seam smooth.
+    func testShellGeometryIsLinearInProgressSoTheSpringIsTheOnlyCurve() {
+        let rect = CGRect(x: 0, y: 0, width: 620, height: 236)
+        let capW: CGFloat = 180
+        let capH: CGFloat = 32
+        func layout(_ p: CGFloat) -> PanelShellLayout {
+            PanelGeometry.shellLayout(in: rect, capWidth: capW, capHeight: capH, progress: p)
+        }
+
+        let full = layout(1)
+        let availableHeight = full.bodyRect.height
+        let growableWidth = rect.width - capW
+
+        for p in stride(from: CGFloat(0), through: 1, by: 0.125) {
+            let l = layout(p)
+            XCTAssertEqual(l.bodyRect.height, availableHeight * p, accuracy: 0.01)
+            XCTAssertEqual(l.bodyRect.width, capW + growableWidth * p, accuracy: 0.01)
+        }
+
+        // Equal steps in progress produce equal steps in size — no front-loading.
+        let quarter = layout(0.25).bodyRect
+        let half = layout(0.5).bodyRect
+        let threeQuarters = layout(0.75).bodyRect
+        XCTAssertEqual(half.width - quarter.width, threeQuarters.width - half.width, accuracy: 0.01)
+        XCTAssertEqual(half.height - quarter.height, threeQuarters.height - half.height, accuracy: 0.01)
+
+        // Radii track the interpolated body and are never re-multiplied by progress.
+        let midpoint = layout(0.5)
         XCTAssertEqual(midpoint.bodyCornerRadius, 24, accuracy: 0.5)
         XCTAssertEqual(midpoint.neckRadius, 18, accuracy: 0.5)
-        XCTAssertGreaterThan(midpoint.bodyRect.height, 90)
-        XCTAssertGreaterThan(midpoint.bodyRect.width, 500)
+    }
+
+    /// On a display with no notch there is no housing to grow out of, so the
+    /// shell scales in place instead of inflating from a phantom cap.
+    func testDetachedShellScalesInPlaceWithNoCap() {
+        let rect = CGRect(x: 0, y: 0, width: 620, height: 420)
+        func detached(_ p: CGFloat) -> PanelShellLayout {
+            PanelGeometry.shellLayout(
+                in: rect,
+                capWidth: 180,
+                capHeight: 32,
+                progress: p,
+                presentation: .detached
+            )
+        }
+
+        let closed = detached(0)
+        XCTAssertEqual(closed.capRect.width, 0, accuracy: 0.001)
+        XCTAssertEqual(closed.neckRadius, 0, accuracy: 0.001)
+        XCTAssertEqual(closed.bodyRect.width, rect.width * PanelGeometry.detachedMinimumScale, accuracy: 0.01)
+
+        let open = detached(1)
+        XCTAssertEqual(open.bodyRect, rect)
+        XCTAssertEqual(open.shellRect, rect)
+
+        // Concentric at every step — it grows in place rather than downward.
+        for p in stride(from: CGFloat(0), through: 1, by: 0.25) {
+            let l = detached(p)
+            XCTAssertEqual(l.bodyRect.midX, rect.midX, accuracy: 0.01)
+            XCTAssertEqual(l.bodyRect.midY, rect.midY, accuracy: 0.01)
+            XCTAssertEqual(l.shellRect, l.bodyRect)
+        }
+
+        // Linear, so the spring's overshoot passes through without a kink here too.
+        let quarter = detached(0.25).bodyRect.width
+        let half = detached(0.5).bodyRect.width
+        let threeQuarters = detached(0.75).bodyRect.width
+        XCTAssertEqual(half - quarter, threeQuarters - half, accuracy: 0.01)
+        XCTAssertGreaterThan(detached(PanelGeometry.maxShellProgress).bodyRect.width, rect.width)
     }
 
     func testNegativeOriginScreen() {

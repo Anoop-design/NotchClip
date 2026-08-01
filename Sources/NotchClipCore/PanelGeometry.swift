@@ -75,28 +75,80 @@ public enum PanelGeometry {
     public static let edgePadding: CGFloat = 8
     public static let shoulderRadius: CGFloat = 28
 
+    /// Ceiling for `shellProgress`. Values above 1 are the spring's overshoot —
+    /// the shape briefly swells past its resting size before settling, which is
+    /// what makes the Dynamic Island read as physical rather than eased.
+    public static let maxShellProgress: CGFloat = 1.06
+    /// Transparent margin the window carries beyond the resting shell so that
+    /// overshoot has somewhere to go instead of being clipped at the frame.
+    public static let overshootHeadroomX: CGFloat = 16
+    public static let overshootHeadroomBottom: CGFloat = 26
+
+    /// The window's frame: the resting panel plus overshoot headroom on the
+    /// sides and bottom. The top stays pinned to the physical notch.
+    public static func windowFrame(on screen: ScreenMetrics) -> CGRect {
+        let resting = expandedFrame(on: screen)
+        return CGRect(
+            x: resting.minX - overshootHeadroomX,
+            y: resting.minY - overshootHeadroomBottom,
+            width: resting.width + overshootHeadroomX * 2,
+            height: resting.height + overshootHeadroomBottom
+        )
+    }
+
+    /// The resting shell rect inside a window frame that includes headroom.
+    public static func restingRect(inWindowSized size: CGSize) -> CGRect {
+        CGRect(
+            x: overshootHeadroomX,
+            y: overshootHeadroomBottom,
+            width: max(0, size.width - overshootHeadroomX * 2),
+            height: max(0, size.height - overshootHeadroomBottom)
+        )
+    }
+
+    /// How the shell should open, which depends on whether there is actually a
+    /// camera housing to grow out of.
+    public enum ShellPresentation: Equatable, Sendable {
+        /// Built-in notched display: the body inflates out of the physical cap.
+        case notch
+        /// External display with no notch. Growing from a cap would be growing
+        /// from a shape the hardware doesn't have, so the panel scales up in
+        /// place like any other HUD instead.
+        case detached
+    }
+
+    /// Scale of the detached shell at progress 0. Close enough to full size that
+    /// it reads as materializing rather than zooming.
+    public static let detachedMinimumScale: CGFloat = 0.86
+
     /// A single source of truth for the shell's compact-to-expanded geometry.
     /// The body grows down and out from the cap rather than appearing as a resized window.
     public static func shellLayout(
         in rect: CGRect,
         capWidth: CGFloat,
         capHeight: CGFloat,
-        progress: CGFloat
+        progress: CGFloat,
+        presentation: ShellPresentation = .notch
     ) -> PanelShellLayout {
-        let p = min(max(progress, 0), 1)
+        if presentation == .detached {
+            return detachedLayout(in: rect, progress: progress)
+        }
+        let p = min(max(progress, 0), maxShellProgress)
         let capW = min(max(1, capWidth), rect.width)
         let capH = min(max(capHeight, 12), max(12, rect.height * 0.42))
         let bodyTop = rect.maxY - capH
         let availableBodyHeight = max(0, bodyTop - rect.minY)
-        // Dynamic-Island inflation: both dimensions are strong ease-outs, so the
-        // shape balloons from the housing in every direction at once and then
-        // settles. The earlier smoothstep vertical made width race ahead and
-        // height lag, which read as a sheet unfurling *below* the notch instead
-        // of the notch itself opening.
-        let horizontalProgress = 1 - CGFloat(pow(Double(1 - p), 2.2))
-        let verticalProgress = 1 - CGFloat(pow(Double(1 - p), 1.9))
-        let bodyHeight = availableBodyHeight * verticalProgress
-        let bodyWidth = capW + max(0, rect.width - capW) * horizontalProgress
+        // Geometry is strictly linear in progress: the spring driving
+        // `shellProgress` is the only motion curve.
+        //
+        // This previously applied its own ease-outs (1 - (1-p)^2.2 and ^1.9) on
+        // top of the spring. Those curves have slope → 0 at p = 1 while the
+        // overshoot region above 1 passes through at slope 1, so the shape
+        // decelerated almost to a stop and then lurched into the overshoot — a
+        // kink exactly where the eye is looking. Easing the value and easing the
+        // geometry are the same job; doing both is what made it feel unnatural.
+        let bodyHeight = availableBodyHeight * p
+        let bodyWidth = capW + max(0, rect.width - capW) * p
         let bodyRect = CGRect(
             x: rect.midX - bodyWidth / 2,
             y: bodyTop - bodyHeight,
@@ -127,6 +179,36 @@ public enum PanelGeometry {
             shellRect: shellRect,
             neckRadius: neck,
             bodyCornerRadius: corner,
+            progress: p
+        )
+    }
+
+    /// Uniform scale about the rect's centre, for displays without a notch.
+    ///
+    /// Linear in progress like the notch path, so the spring stays the only
+    /// motion curve and its overshoot passes through without a kink. There is no
+    /// cap: the caller pairs this with an opacity fade so the panel appears
+    /// rather than unfurling from a housing that isn't there.
+    private static func detachedLayout(in rect: CGRect, progress: CGFloat) -> PanelShellLayout {
+        let p = min(max(progress, 0), maxShellProgress)
+        let scale = detachedMinimumScale + (1 - detachedMinimumScale) * p
+        let width = rect.width * scale
+        let height = rect.height * scale
+        let body = CGRect(
+            x: rect.midX - width / 2,
+            y: rect.midY - height / 2,
+            width: width,
+            height: height
+        )
+        // Zero-width cap at the top centre: nothing to draw, but it keeps
+        // `capRect` meaningful for callers that read it.
+        let cap = CGRect(x: rect.midX, y: body.maxY, width: 0, height: 0)
+        return PanelShellLayout(
+            capRect: cap,
+            bodyRect: body,
+            shellRect: body,
+            neckRadius: 0,
+            bodyCornerRadius: min(24, width / 2, height / 2),
             progress: p
         )
     }

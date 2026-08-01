@@ -8,10 +8,10 @@
 	<string>NotchClip</string>
 	<key>CFBundleExecutable</key>
 	<string>NotchClip</string>
-	<key>CFBundleIdentifier</key>
-	<string>com.anoop.notchclip</string>
 	<key>CFBundleIconFile</key>
 	<string>AppIcon</string>
+	<key>CFBundleIdentifier</key>
+	<string>com.anoop.notchclip</string>
 	<key>CFBundleInfoDictionaryVersion</key>
 	<string>6.0</string>
 	<key>CFBundleName</key>
@@ -19,9 +19,9 @@
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>CFBundleShortVersionString</key>
-	<string>0.5.0</string>
+	<string>0.5.1</string>
 	<key>CFBundleVersion</key>
-	<string>9</string>
+	<string>10</string>
 	<key>LSMinimumSystemVersion</key>
 	<string>14.0</string>
 	<key>LSMultipleInstancesProhibited</key>
