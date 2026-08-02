@@ -37,42 +37,129 @@ private enum NotchShellTransition {
     case expand
     case collapse
 
-    var timingFunction: CAMediaTimingFunction {
+    /// Spring constants (mass 1) per axis. These springs are the *only* curves
+    /// shaping the motion, since `shellLayout` is linear in each channel.
+    typealias Spec = (stiffness: CGFloat, damping: CGFloat)
+
+    /// The width channel leads. ζ ≈ 0.98 has no measurable overshoot and settles
+    /// in 0.362 s — about 16 % ahead of the height — so the panel reaches its
+    /// full width while it is still filling downward. The shape blooms sideways
+    /// and the weight arrives after it, which is what stops the old
+    /// single-scalar version from growing along a perfect diagonal.
+    ///
+    /// Damping is deliberately just *under* critical: `settlingDuration` is not
+    /// monotonic in damping near ζ = 1 (measured: 600/48 settles in 0.362 s,
+    /// but 620/50 at ζ = 1.004 jumps to 0.400 s), so overdamping to "guarantee"
+    /// no overshoot would make the width slower than the height and invert the
+    /// bloom.
+    var widthSpec: Spec {
         switch self {
-        case .expand:
-            // Leaves the notch fast and decelerates long into the final size, so
-            // the shell reads as one piece of material stretching rather than a
-            // window being resized.
-            return CAMediaTimingFunction(controlPoints: 0.12, 0.92, 0.20, 1.0)
-        case .collapse:
-            // Mirror image: hesitates briefly, then pulls back into the notch.
-            return CAMediaTimingFunction(controlPoints: 0.45, 0.0, 0.25, 1.0)
+        case .expand: return (600, 48)    // ζ 0.980, settles 0.362 s
+        case .collapse: return (560, 47)  // ζ 0.993, settles 0.390 s
         }
     }
 
-    /// Physical spring for the shell mask — now the *only* curve shaping the
-    /// motion, since `shellLayout` became linear in progress.
-    var springAnimation: CASpringAnimation {
-        let spring = CASpringAnimation(keyPath: "shellProgress")
-        spring.mass = 1
+    /// The height channel keeps the approved open character: ω₀ = √480 ≈ 21.9,
+    /// ζ = 36/(2ω₀) ≈ 0.82 → peak ≈ 1.011. With the width already at rest that
+    /// 1 % now reads as a downward swell — weight settling — rather than as the
+    /// whole panel bouncing. ζ ≈ 0.73 overshot ~3 % and was rejected as elastic.
+    ///
+    /// On the way in the height leads instead (mirror of the open), but only
+    /// just: 0.358 s against the width's 0.390 s. Both are ζ ≈ 0.99, because a
+    /// bounce on dismissal reads as hesitation.
+    var heightSpec: Spec {
         switch self {
-        case .expand:
-            // ω₀ = √480 ≈ 21.9 rad/s, ζ = 36/(2ω₀) ≈ 0.82 → peak ≈ 1.012.
-            // Just enough swell to read as weight settling, not as a bounce;
-            // ζ ≈ 0.73 overshot ~3 % and looked like the panel expanded too far
-            // before correcting itself.
-            spring.stiffness = 480
-            spring.damping = 36
-        case .collapse:
-            // ζ ≈ 0.99 — critically damped, the fastest settle with no
-            // overshoot at all. Dismissal should read as decisive; a bounce on
-            // the way out reads as hesitation.
-            spring.stiffness = 560
-            spring.damping = 47
+        case .expand: return (480, 36)    // ζ 0.822, peak 1.011, settles 0.433 s
+        case .collapse: return (660, 51)  // ζ 0.993, settles 0.358 s
         }
-        spring.initialVelocity = 0
+    }
+
+    /// Displays with no notch scale uniformly, so there is no bloom to split —
+    /// both channels ride this one spring, which is the pre-bloom character.
+    var uniformSpec: Spec {
+        switch self {
+        case .expand: return (480, 36)
+        case .collapse: return (560, 47)
+        }
+    }
+
+    /// Settling time of the height axis. The content choreography is keyed to
+    /// this and not to the width, which is ~16 % shorter by construction.
+    var heightSettlingDuration: TimeInterval {
+        Self.spring(keyPath: "shellProgressY", spec: heightSpec, from: 0, to: 1, velocity: 0)
+            .settlingDuration
+    }
+
+    /// Settling time of the uniform (detached) spring.
+    var uniformSettlingDuration: TimeInterval {
+        Self.spring(keyPath: "shellProgressY", spec: uniformSpec, from: 0, to: 1, velocity: 0)
+            .settlingDuration
+    }
+
+    /// A normalized velocity beyond this is a sampling artefact, not motion.
+    private static let maxNormalizedVelocity: CGFloat = 80
+
+    /// Builds one channel's spring, seeded with the shell's current speed so an
+    /// interrupted transition is retargeted rather than restarted.
+    ///
+    /// `initialVelocity` is normalized by the distance still to travel and is
+    /// signed relative to the *target*, so motion away from it is negative.
+    /// Measured, not assumed: animating 0.4 → 0 with -7.5 makes the value climb
+    /// past 0.4 before turning around, which is exactly a reversal that keeps
+    /// its momentum.
+    static func spring(
+        keyPath: String,
+        spec: Spec,
+        from current: CGFloat,
+        to target: CGFloat,
+        velocity: CGFloat
+    ) -> CASpringAnimation {
+        let spring = CASpringAnimation(keyPath: keyPath)
+        spring.mass = 1
+        spring.stiffness = spec.stiffness
+        spring.damping = spec.damping
+        let distance = target - current
+        if abs(distance) > 0.0001, velocity != 0 {
+            let normalized = velocity / distance
+            spring.initialVelocity = min(
+                max(normalized, -maxNormalizedVelocity),
+                maxNormalizedVelocity
+            )
+        } else {
+            spring.initialVelocity = 0
+        }
+        // settlingDuration accounts for the initial velocity, so read it last.
         spring.duration = spring.settlingDuration
         return spring
+    }
+
+    /// Both channels for this transition, seeded from the shell's current state.
+    func springs(
+        uniform: Bool,
+        fromX: CGFloat,
+        fromY: CGFloat,
+        velocityX: CGFloat,
+        velocityY: CGFloat,
+        to target: CGFloat
+    ) -> (x: CASpringAnimation, y: CASpringAnimation) {
+        let xSpec = uniform ? uniformSpec : widthSpec
+        let ySpec = uniform ? uniformSpec : heightSpec
+        return (
+            Self.spring(
+                keyPath: "shellProgressX",
+                spec: xSpec,
+                from: fromX,
+                to: target,
+                velocity: velocityX
+            ),
+            Self.spring(
+                keyPath: "shellProgressY",
+                spec: ySpec,
+                from: fromY,
+                to: target,
+                velocity: velocityY
+            )
+        )
     }
 }
 
@@ -309,7 +396,12 @@ final class NotchPanelController: NSObject, NSWindowDelegate {
                 // Starts once the shell has real area, and lands *before* the
                 // spring's final micro-settle so the content is already in place
                 // as the shape stops moving.
-                let shellDuration = NotchShellTransition.expand.springAnimation.settlingDuration
+                //
+                // Keyed to the height axis specifically: it is the longer of the
+                // two channels and the one the eye tracks, and every ratio below
+                // was calibrated against it. Keying off the width would shorten
+                // them all by ~16 % for no reason.
+                let shellDuration = NotchShellTransition.expand.heightSettlingDuration
                 if !metrics.hasNotch {
                     // Fade completes early so the panel is solid while the
                     // spring is still settling — the scale carries the motion.
@@ -399,7 +491,9 @@ final class NotchPanelController: NSObject, NSWindowDelegate {
         // Detached shells scale back down; without a matching fade they would
         // vanish abruptly at their smallest scale instead of dissolving.
         if !metrics.hasNotch {
-            let collapseDuration = NotchShellTransition.collapse.springAnimation.settlingDuration
+            // This branch is the detached one, where both channels ride the
+            // uniform spring — so that is the duration to pair the fade with.
+            let collapseDuration = NotchShellTransition.collapse.uniformSettlingDuration
             animatePanelAlpha(to: 0, duration: collapseDuration * 0.85) {}
         }
 
@@ -561,6 +655,10 @@ final class NotchPanelController: NSObject, NSWindowDelegate {
 
         let chrome = NotchChromeView(frame: .zero)
         chrome.autoresizingMask = [.width, .height]
+        // The panel's window reserves room above the resting shell on notch-less
+        // displays, which is what the detached open's downward settle moves
+        // through. `windowFrame` reserves the matching margin.
+        chrome.detachedTopHeadroom = PanelGeometry.detachedTopHeadroom
 
         let root = PanelRootView(
             history: history,
@@ -605,7 +703,9 @@ final class NotchPanelController: NSObject, NSWindowDelegate {
         let capW = PanelGeometry.capWidth(on: metrics)
         let capH = max(PanelGeometry.compactMinHeight, metrics.hasNotch ? metrics.topSafeInset : PanelGeometry.compactMinHeight)
         chromeView?.updateShell(width: capW, height: capH, attachesToNotch: metrics.hasNotch)
-        chromeView?.shellProgress = progress
+        // Direct, unanimated: also discards sampled velocity, so a later
+        // transition doesn't inherit momentum from a jump.
+        chromeView?.setShellProgress(x: progress, y: progress)
         visualState.shellProgress = progress
         visualState.capWidth = capW
         visualState.capHeight = capH
@@ -627,17 +727,39 @@ final class NotchPanelController: NSObject, NSWindowDelegate {
             return
         }
         let metrics = presentationMetrics ?? currentScreenMetrics()
-        if plan.allowsGeometryAnimation {
+        if plan.allowsGeometryAnimation, let chrome = chromeView {
             // Keep the transparent hosting window stable and animate only the shell mask.
             // Resizing both the window and the mask multiplies progress and causes a snap.
             panel.setFrame(frame, display: true)
-            // Install the direction-specific spring; AppKit drives shellProgress
-            // through it, overshoot included.
-            let spring = transition.springAnimation
-            chromeView?.animations = ["shellProgress": spring]
+            // Install the direction-specific springs, one per axis, each seeded
+            // with that channel's current speed. AppKit drives both properties
+            // through them, overshoot included.
+            //
+            // Never short-circuit when the target is unchanged: the completion
+            // closure is what advances `phase` and takes focus, and `show()` has
+            // already invalidated the in-flight animation's own completion by
+            // bumping `openGeneration`. Restarting is safe precisely because the
+            // velocity carries over — retargeting a linear spring to the same
+            // target from the same state continues the same trajectory.
+            let springs = transition.springs(
+                uniform: !metrics.hasNotch,
+                fromX: chrome.shellProgressX,
+                fromY: chrome.shellProgressY,
+                velocityX: chrome.widthVelocity,
+                velocityY: chrome.heightVelocity,
+                to: shellProgress
+            )
+            chrome.animations = [
+                "shellProgressX": springs.x,
+                "shellProgressY": springs.y
+            ]
             NSAnimationContext.runAnimationGroup({ ctx in
-                ctx.duration = spring.settlingDuration
-                self.chromeView?.animator().shellProgress = shellProgress
+                // Measured: each property honours its own animation's duration
+                // even inside one group, so the group only needs to outlast the
+                // slower channel for the completion to fire at the right time.
+                ctx.duration = max(springs.x.settlingDuration, springs.y.settlingDuration)
+                chrome.animator().shellProgressX = shellProgress
+                chrome.animator().shellProgressY = shellProgress
             }, completionHandler: { [weak self] in
                 Task { @MainActor in
                     guard let self else { return }
@@ -923,10 +1045,14 @@ final class NotchPanelController: NSObject, NSWindowDelegate {
         let location = NSEvent.mouseLocation
         // The window is larger than the visible shell (overshoot headroom), so
         // hit-test the resting rect or a click in the margin would be ignored.
-        var visible = panel.frame
-        visible = visible.insetBy(dx: PanelGeometry.overshootHeadroomX, dy: 0)
+        // Detached presentations also carry headroom above the shell; without
+        // subtracting it, clicks in the strip just above the panel would count
+        // as inside and stop dismissing it.
+        let hasNotch = presentationMetrics?.hasNotch ?? true
+        var visible = panel.frame.insetBy(dx: PanelGeometry.overshootHeadroomX, dy: 0)
         visible.origin.y += PanelGeometry.overshootHeadroomBottom
         visible.size.height -= PanelGeometry.overshootHeadroomBottom
+            + PanelGeometry.topHeadroom(hasNotch: hasNotch)
         if !visible.contains(location) {
             let gen = openGeneration
             DispatchQueue.main.async { [weak self] in

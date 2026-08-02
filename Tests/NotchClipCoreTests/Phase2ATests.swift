@@ -120,11 +120,13 @@ final class PanelGeometryTests: XCTestCase {
             capHeight: 32,
             progress: 2
         )
-        XCTAssertEqual(belowZero.progress, 0)
+        XCTAssertEqual(belowZero.progress, ShellProgress.zero)
         // Values above 1 are the open spring's overshoot and are allowed up to
-        // maxShellProgress; the window carries headroom so they aren't clipped.
-        XCTAssertEqual(aboveOne.progress, PanelGeometry.maxShellProgress)
-        XCTAssertGreaterThan(PanelGeometry.maxShellProgress, 1)
+        // each axis's own ceiling; the window carries headroom so they aren't
+        // clipped.
+        XCTAssertEqual(aboveOne.progress.x, PanelGeometry.maxShellProgressX)
+        XCTAssertEqual(aboveOne.progress.y, PanelGeometry.maxShellProgressY)
+        XCTAssertGreaterThan(PanelGeometry.maxShellProgressY, 1)
 
         // Overshoot must stay inside the headroom the window actually reserves.
         let overshot = PanelGeometry.shellLayout(
@@ -142,6 +144,122 @@ final class PanelGeometryTests: XCTestCase {
             rect.minY - overshot.bodyRect.minY,
             PanelGeometry.overshootHeadroomBottom
         )
+    }
+
+    /// Width and height ride separate springs, so they clamp separately. The
+    /// width spring is all but critically damped and has nowhere near 6 % of
+    /// swell in it; letting the width reach the height's ceiling would only
+    /// allow a shape that reads as elastic, which was rejected.
+    func testEachAxisClampsAtItsOwnOvershootCeiling() {
+        let rect = CGRect(x: 0, y: 0, width: 620, height: 420)
+        let capW: CGFloat = 180
+        let capH: CGFloat = 32
+
+        XCTAssertLessThan(PanelGeometry.maxShellProgressX, PanelGeometry.maxShellProgressY)
+        XCTAssertGreaterThan(PanelGeometry.maxShellProgressX, 1)
+        // The single-channel ceiling stays the height's, so existing callers
+        // keep the same headroom budget.
+        XCTAssertEqual(PanelGeometry.maxShellProgress, PanelGeometry.maxShellProgressY)
+
+        let pinned = PanelGeometry.shellLayout(
+            in: rect,
+            capWidth: capW,
+            capHeight: capH,
+            progress: ShellProgress(x: 5, y: 5)
+        )
+        XCTAssertEqual(pinned.progress.x, PanelGeometry.maxShellProgressX)
+        XCTAssertEqual(pinned.progress.y, PanelGeometry.maxShellProgressY)
+
+        let growable = rect.width - capW
+        XCTAssertEqual(
+            pinned.bodyRect.width,
+            capW + growable * PanelGeometry.maxShellProgressX,
+            accuracy: 0.01
+        )
+        let availableHeight = rect.height - capH
+        XCTAssertEqual(
+            pinned.bodyRect.height,
+            availableHeight * PanelGeometry.maxShellProgressY,
+            accuracy: 0.01
+        )
+
+        // Both ceilings stay inside the transparent margin the window reserves.
+        XCTAssertLessThanOrEqual(
+            (pinned.bodyRect.width - rect.width) / 2,
+            PanelGeometry.overshootHeadroomX
+        )
+        XCTAssertLessThanOrEqual(
+            rect.minY - pinned.bodyRect.minY,
+            PanelGeometry.overshootHeadroomBottom
+        )
+
+        // Negative values on one channel don't drag the other below zero.
+        let mixed = PanelGeometry.shellLayout(
+            in: rect,
+            capWidth: capW,
+            capHeight: capH,
+            progress: ShellProgress(x: -3, y: 0.5)
+        )
+        XCTAssertEqual(mixed.bodyRect.width, capW, accuracy: 0.01)
+        XCTAssertEqual(mixed.bodyRect.height, availableHeight * 0.5, accuracy: 0.01)
+    }
+
+    /// Width leads, height follows: each channel must move only its own axis,
+    /// or the two springs would smear into each other and there would be no
+    /// bloom to see.
+    func testAxisChannelsAreIndependentAndEachIsLinear() {
+        let rect = CGRect(x: 0, y: 0, width: 620, height: 420)
+        let capW: CGFloat = 180
+        let capH: CGFloat = 32
+        func layout(_ x: CGFloat, _ y: CGFloat) -> PanelShellLayout {
+            PanelGeometry.shellLayout(
+                in: rect,
+                capWidth: capW,
+                capHeight: capH,
+                progress: ShellProgress(x: x, y: y)
+            )
+        }
+
+        let availableHeight = rect.height - capH
+        let growableWidth = rect.width - capW
+
+        // Sweeping one channel leaves the other axis untouched.
+        for p in stride(from: CGFloat(0), through: 1, by: 0.125) {
+            let widthOnly = layout(p, 0.3)
+            XCTAssertEqual(widthOnly.bodyRect.width, capW + growableWidth * p, accuracy: 0.01)
+            XCTAssertEqual(widthOnly.bodyRect.height, availableHeight * 0.3, accuracy: 0.01)
+
+            let heightOnly = layout(0.3, p)
+            XCTAssertEqual(heightOnly.bodyRect.width, capW + growableWidth * 0.3, accuracy: 0.01)
+            XCTAssertEqual(heightOnly.bodyRect.height, availableHeight * p, accuracy: 0.01)
+        }
+
+        // Equal steps in either channel produce equal steps in its own axis —
+        // strictly linear, so the springs remain the only motion curves.
+        let quarter = layout(0.25, 0.25).bodyRect
+        let half = layout(0.5, 0.5).bodyRect
+        let threeQuarters = layout(0.75, 0.75).bodyRect
+        XCTAssertEqual(half.width - quarter.width, threeQuarters.width - half.width, accuracy: 0.01)
+        XCTAssertEqual(half.height - quarter.height, threeQuarters.height - half.height, accuracy: 0.01)
+
+        // A width that has arrived while the height is still filling is the
+        // whole point: the shape is wide and short, not diagonal.
+        let blooming = layout(1, 0.4)
+        XCTAssertEqual(blooming.bodyRect.width, rect.width, accuracy: 0.01)
+        XCTAssertEqual(blooming.bodyRect.height, availableHeight * 0.4, accuracy: 0.01)
+        XCTAssertEqual(blooming.bodyRect.midX, rect.midX, accuracy: 0.01)
+        // Still hanging from the cap, whatever the two channels are doing.
+        XCTAssertEqual(blooming.capRect.maxY, rect.maxY, accuracy: 0.001)
+        XCTAssertEqual(blooming.bodyRect.maxY, rect.maxY - capH, accuracy: 0.001)
+
+        // The single-CGFloat convenience is exactly both channels together.
+        let uniform = PanelGeometry.shellLayout(
+            in: rect,
+            capWidth: capW,
+            capHeight: capH,
+            progress: 0.6
+        )
+        XCTAssertEqual(uniform.bodyRect, layout(0.6, 0.6).bodyRect)
     }
 
     func testWindowFrameReservesOvershootHeadroomWithoutMovingTheCap() {
@@ -205,9 +323,17 @@ final class PanelGeometryTests: XCTestCase {
     }
 
     /// On a display with no notch there is no housing to grow out of, so the
-    /// shell scales in place instead of inflating from a phantom cap.
-    func testDetachedShellScalesInPlaceWithNoCap() {
+    /// shell scales instead of inflating from a phantom cap — but it scales from
+    /// its *top edge*, not its centre.
+    ///
+    /// The concentric 0.86 → 1 version this replaced moved the top edge down and
+    /// then back up, so the panel read as floating in front of the display
+    /// rather than hanging off the top of it. Pinning the top and adding a short
+    /// downward settle tells the same story the notched version tells with real
+    /// hardware.
+    func testDetachedShellHangsFromTheTopEdgeAndSettlesDown() {
         let rect = CGRect(x: 0, y: 0, width: 620, height: 420)
+        let settle = PanelGeometry.detachedSettleOffset
         func detached(_ p: CGFloat) -> PanelShellLayout {
             PanelGeometry.shellLayout(
                 in: rect,
@@ -221,26 +347,127 @@ final class PanelGeometryTests: XCTestCase {
         let closed = detached(0)
         XCTAssertEqual(closed.capRect.width, 0, accuracy: 0.001)
         XCTAssertEqual(closed.neckRadius, 0, accuracy: 0.001)
-        XCTAssertEqual(closed.bodyRect.width, rect.width * PanelGeometry.detachedMinimumScale, accuracy: 0.01)
+        // Close enough to full size that it materializes rather than zooming.
+        XCTAssertEqual(
+            closed.bodyRect.width,
+            rect.width * PanelGeometry.detachedMinimumScale,
+            accuracy: 0.01
+        )
+        XCTAssertGreaterThanOrEqual(PanelGeometry.detachedMinimumScale, 0.94)
+        // Starts above its resting top and slides down into place.
+        XCTAssertEqual(closed.bodyRect.maxY, rect.maxY + settle, accuracy: 0.01)
 
         let open = detached(1)
         XCTAssertEqual(open.bodyRect, rect)
         XCTAssertEqual(open.shellRect, rect)
 
-        // Concentric at every step — it grows in place rather than downward.
-        for p in stride(from: CGFloat(0), through: 1, by: 0.25) {
+        // The top edge only ever moves by the settle, and only downward — it
+        // never dips below the rest and comes back up.
+        var previousTop = closed.bodyRect.maxY
+        for p in stride(from: CGFloat(0), through: 1, by: 0.125) {
             let l = detached(p)
             XCTAssertEqual(l.bodyRect.midX, rect.midX, accuracy: 0.01)
-            XCTAssertEqual(l.bodyRect.midY, rect.midY, accuracy: 0.01)
             XCTAssertEqual(l.shellRect, l.bodyRect)
+            XCTAssertEqual(l.bodyRect.maxY, rect.maxY + settle * (1 - p), accuracy: 0.01)
+            XCTAssertLessThanOrEqual(l.bodyRect.maxY, previousTop + 0.001)
+            XCTAssertGreaterThanOrEqual(l.bodyRect.maxY, rect.maxY - 0.001)
+            previousTop = l.bodyRect.maxY
         }
 
-        // Linear, so the spring's overshoot passes through without a kink here too.
-        let quarter = detached(0.25).bodyRect.width
-        let half = detached(0.5).bodyRect.width
-        let threeQuarters = detached(0.75).bodyRect.width
-        XCTAssertEqual(half - quarter, threeQuarters - half, accuracy: 0.01)
+        // Linear in both the scale and the settle, so the spring's overshoot
+        // passes through without a kink here too.
+        let quarter = detached(0.25)
+        let half = detached(0.5)
+        let threeQuarters = detached(0.75)
+        XCTAssertEqual(
+            half.bodyRect.width - quarter.bodyRect.width,
+            threeQuarters.bodyRect.width - half.bodyRect.width,
+            accuracy: 0.01
+        )
+        XCTAssertEqual(
+            quarter.bodyRect.maxY - half.bodyRect.maxY,
+            half.bodyRect.maxY - threeQuarters.bodyRect.maxY,
+            accuracy: 0.01
+        )
         XCTAssertGreaterThan(detached(PanelGeometry.maxShellProgress).bodyRect.width, rect.width)
+
+        // Uniform scale, so the width channel is ignored: routing the two
+        // channels through a mean would be nonlinear above the width ceiling,
+        // where they clamp differently.
+        let splitChannels = PanelGeometry.shellLayout(
+            in: rect,
+            capWidth: 180,
+            capHeight: 32,
+            progress: ShellProgress(x: 0.1, y: 0.5),
+            presentation: .detached
+        )
+        XCTAssertEqual(splitChannels.bodyRect, detached(0.5).bodyRect)
+
+        // Callers whose window reserves no room above the shell opt out of the
+        // settle rather than having its first frames clipped.
+        let noRoom = PanelGeometry.shellLayout(
+            in: rect,
+            capWidth: 180,
+            capHeight: 32,
+            progress: 0,
+            presentation: .detached,
+            detachedSettle: 0
+        )
+        XCTAssertEqual(noRoom.bodyRect.maxY, rect.maxY, accuracy: 0.01)
+    }
+
+    /// The settle needs somewhere to travel from, and only the notch-less path
+    /// reserves it — the notched shell's top edge is pinned to real hardware and
+    /// must never move.
+    func testDetachedWindowReservesTopHeadroomAndNotchedDoesNot() {
+        let external = ScreenMetrics(
+            frame: CGRect(x: 1512, y: 0, width: 1920, height: 1080),
+            visibleFrame: CGRect(x: 1512, y: 0, width: 1920, height: 1055),
+            topSafeInset: 0
+        )
+        let builtIn = ScreenMetrics(
+            frame: CGRect(x: 0, y: 0, width: 1512, height: 982),
+            visibleFrame: CGRect(x: 0, y: 0, width: 1512, height: 944),
+            topSafeInset: 32,
+            notchWidth: 180
+        )
+
+        XCTAssertEqual(PanelGeometry.topHeadroom(hasNotch: true), 0)
+        XCTAssertEqual(
+            PanelGeometry.topHeadroom(hasNotch: false),
+            PanelGeometry.detachedTopHeadroom
+        )
+        // Enough room for the whole settle.
+        XCTAssertGreaterThanOrEqual(
+            PanelGeometry.detachedTopHeadroom,
+            PanelGeometry.detachedSettleOffset
+        )
+
+        let notchedWindow = PanelGeometry.windowFrame(on: builtIn)
+        let notchedResting = PanelGeometry.expandedFrame(on: builtIn)
+        XCTAssertEqual(notchedWindow.maxY, notchedResting.maxY, accuracy: 0.5)
+
+        let detachedWindow = PanelGeometry.windowFrame(on: external)
+        let detachedResting = PanelGeometry.expandedFrame(on: external)
+        XCTAssertEqual(
+            detachedWindow.maxY - detachedResting.maxY,
+            PanelGeometry.detachedTopHeadroom,
+            accuracy: 0.5
+        )
+        // The headroom is transparent margin, not extra panel: the resting rect
+        // inside it is still exactly the panel, so content placement and
+        // hit-testing are unchanged.
+        let inner = PanelGeometry.restingRect(
+            inWindowSized: detachedWindow.size,
+            topHeadroom: PanelGeometry.detachedTopHeadroom
+        )
+        XCTAssertEqual(inner.width, detachedResting.width, accuracy: 0.5)
+        XCTAssertEqual(inner.height, detachedResting.height, accuracy: 0.5)
+        XCTAssertEqual(
+            inner.maxY,
+            detachedWindow.height - PanelGeometry.detachedTopHeadroom,
+            accuracy: 0.5
+        )
     }
 
     func testNegativeOriginScreen() {

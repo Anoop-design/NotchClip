@@ -32,6 +32,44 @@ public struct ScreenMetrics: Equatable, Sendable {
     }
 }
 
+/// The shell's two independent motion channels.
+///
+/// One scalar used to drive both axes, so the shape grew along a perfect
+/// diagonal — geometrically tidy, but nothing physical expands that way. Width
+/// and height now ride separate springs: the width arrives first and with no
+/// overshoot, the height follows and swells a fraction past its resting size,
+/// so the panel blooms sideways and the weight settles downward after it.
+public struct ShellProgress: Equatable, Sendable {
+    /// Horizontal channel — drives `bodyRect.width`.
+    public var x: CGFloat
+    /// Vertical channel — drives `bodyRect.height`.
+    public var y: CGFloat
+
+    public init(x: CGFloat, y: CGFloat) {
+        self.x = x
+        self.y = y
+    }
+
+    /// Both channels together, for callers with no reason to distinguish them.
+    /// Deliberately *not* `ExpressibleByFloatLiteral`: keeping it un-inferrable
+    /// from a literal is what lets the single-`CGFloat` `shellLayout` overload
+    /// coexist without ambiguity.
+    public init(uniform: CGFloat) {
+        self.init(x: uniform, y: uniform)
+    }
+
+    public static let zero = ShellProgress(uniform: 0)
+    public static let resting = ShellProgress(uniform: 1)
+
+    /// Clamped to each axis's own ceiling.
+    public var clamped: ShellProgress {
+        ShellProgress(
+            x: min(max(x, 0), PanelGeometry.maxShellProgressX),
+            y: min(max(y, 0), PanelGeometry.maxShellProgressY)
+        )
+    }
+}
+
 /// Interpolated shell measurements shared by AppKit rendering and pure geometry tests.
 public struct PanelShellLayout: Equatable, Sendable {
     public var capRect: CGRect
@@ -39,7 +77,7 @@ public struct PanelShellLayout: Equatable, Sendable {
     public var shellRect: CGRect
     public var neckRadius: CGFloat
     public var bodyCornerRadius: CGFloat
-    public var progress: CGFloat
+    public var progress: ShellProgress
 
     public init(
         capRect: CGRect,
@@ -47,7 +85,7 @@ public struct PanelShellLayout: Equatable, Sendable {
         shellRect: CGRect,
         neckRadius: CGFloat,
         bodyCornerRadius: CGFloat,
-        progress: CGFloat
+        progress: ShellProgress
     ) {
         self.capRect = capRect
         self.bodyRect = bodyRect
@@ -75,34 +113,56 @@ public enum PanelGeometry {
     public static let edgePadding: CGFloat = 8
     public static let shoulderRadius: CGFloat = 28
 
-    /// Ceiling for `shellProgress`. Values above 1 are the spring's overshoot —
-    /// the shape briefly swells past its resting size before settling, which is
-    /// what makes the Dynamic Island read as physical rather than eased.
-    public static let maxShellProgress: CGFloat = 1.06
+    /// Ceiling for the height channel. Values above 1 are the spring's
+    /// overshoot — the shape briefly swells past its resting size before
+    /// settling, which is what makes the Dynamic Island read as physical rather
+    /// than eased.
+    public static let maxShellProgressY: CGFloat = 1.06
+    /// Ceiling for the width channel. The width spring is all but critically
+    /// damped, so this is a guard rail rather than a budget: a wide shell that
+    /// visibly springs sideways reads as elastic, which was rejected.
+    public static let maxShellProgressX: CGFloat = 1.015
+    /// Single-channel ceiling, for callers that speak in one progress value.
+    /// The height ceiling, being the larger of the two.
+    public static let maxShellProgress: CGFloat = maxShellProgressY
     /// Transparent margin the window carries beyond the resting shell so that
     /// overshoot has somewhere to go instead of being clipped at the frame.
     public static let overshootHeadroomX: CGFloat = 16
     public static let overshootHeadroomBottom: CGFloat = 26
+    /// Transparent margin *above* the resting shell, reserved only on displays
+    /// with no notch. The detached open starts slightly above its resting top
+    /// and settles down into it; without this the first frames would be clipped
+    /// at the window edge. The notched path reserves none — its top edge is
+    /// pinned to the physical housing and must never move.
+    public static let detachedTopHeadroom: CGFloat = 12
+
+    /// Room reserved above the resting shell for the given display.
+    public static func topHeadroom(hasNotch: Bool) -> CGFloat {
+        hasNotch ? 0 : detachedTopHeadroom
+    }
 
     /// The window's frame: the resting panel plus overshoot headroom on the
-    /// sides and bottom. The top stays pinned to the physical notch.
+    /// sides and bottom, and — on notch-less displays only — above.
     public static func windowFrame(on screen: ScreenMetrics) -> CGRect {
         let resting = expandedFrame(on: screen)
         return CGRect(
             x: resting.minX - overshootHeadroomX,
             y: resting.minY - overshootHeadroomBottom,
             width: resting.width + overshootHeadroomX * 2,
-            height: resting.height + overshootHeadroomBottom
+            height: resting.height + overshootHeadroomBottom + topHeadroom(hasNotch: screen.hasNotch)
         )
     }
 
     /// The resting shell rect inside a window frame that includes headroom.
-    public static func restingRect(inWindowSized size: CGSize) -> CGRect {
+    public static func restingRect(
+        inWindowSized size: CGSize,
+        topHeadroom: CGFloat = 0
+    ) -> CGRect {
         CGRect(
             x: overshootHeadroomX,
             y: overshootHeadroomBottom,
             width: max(0, size.width - overshootHeadroomX * 2),
-            height: max(0, size.height - overshootHeadroomBottom)
+            height: max(0, size.height - overshootHeadroomBottom - topHeadroom)
         )
     }
 
@@ -119,27 +179,38 @@ public enum PanelGeometry {
 
     /// Scale of the detached shell at progress 0. Close enough to full size that
     /// it reads as materializing rather than zooming.
-    public static let detachedMinimumScale: CGFloat = 0.86
+    public static let detachedMinimumScale: CGFloat = 0.96
+    /// How far above its resting top the detached shell starts. It slides down
+    /// into place over the open, which is what makes it read as dropping out of
+    /// the top edge of the screen rather than fading in mid-air.
+    public static let detachedSettleOffset: CGFloat = 10
 
     /// A single source of truth for the shell's compact-to-expanded geometry.
     /// The body grows down and out from the cap rather than appearing as a resized window.
+    ///
+    /// - Parameter detachedSettle: how far above its rest the detached shell
+    ///   starts. Callers whose window reserves no top headroom (the capture
+    ///   pulse) pass 0 so the settle can't be clipped.
     public static func shellLayout(
         in rect: CGRect,
         capWidth: CGFloat,
         capHeight: CGFloat,
-        progress: CGFloat,
-        presentation: ShellPresentation = .notch
+        progress: ShellProgress,
+        presentation: ShellPresentation = .notch,
+        detachedSettle: CGFloat = detachedSettleOffset
     ) -> PanelShellLayout {
         if presentation == .detached {
-            return detachedLayout(in: rect, progress: progress)
+            return detachedLayout(in: rect, progress: progress, settle: detachedSettle)
         }
-        let p = min(max(progress, 0), maxShellProgress)
+        let clamped = progress.clamped
+        let px = clamped.x
+        let py = clamped.y
         let capW = min(max(1, capWidth), rect.width)
         let capH = min(max(capHeight, 12), max(12, rect.height * 0.42))
         let bodyTop = rect.maxY - capH
         let availableBodyHeight = max(0, bodyTop - rect.minY)
-        // Geometry is strictly linear in progress: the spring driving
-        // `shellProgress` is the only motion curve.
+        // Geometry is strictly linear in *each* channel: the two springs driving
+        // `shellProgressX` / `shellProgressY` are the only motion curves.
         //
         // This previously applied its own ease-outs (1 - (1-p)^2.2 and ^1.9) on
         // top of the spring. Those curves have slope → 0 at p = 1 while the
@@ -147,8 +218,8 @@ public enum PanelGeometry {
         // decelerated almost to a stop and then lurched into the overshoot — a
         // kink exactly where the eye is looking. Easing the value and easing the
         // geometry are the same job; doing both is what made it feel unnatural.
-        let bodyHeight = availableBodyHeight * p
-        let bodyWidth = capW + max(0, rect.width - capW) * p
+        let bodyHeight = availableBodyHeight * py
+        let bodyWidth = capW + max(0, rect.width - capW) * px
         let bodyRect = CGRect(
             x: rect.midX - bodyWidth / 2,
             y: bodyTop - bodyHeight,
@@ -179,24 +250,64 @@ public enum PanelGeometry {
             shellRect: shellRect,
             neckRadius: neck,
             bodyCornerRadius: corner,
-            progress: p
+            progress: ShellProgress(x: px, y: py)
         )
     }
 
-    /// Uniform scale about the rect's centre, for displays without a notch.
+    /// Single-channel convenience: both axes move together. Kept so callers with
+    /// no interest in the bloom — tests, the capture pulse, the onboarding
+    /// preview — read the same as before.
+    public static func shellLayout(
+        in rect: CGRect,
+        capWidth: CGFloat,
+        capHeight: CGFloat,
+        progress: CGFloat,
+        presentation: ShellPresentation = .notch,
+        detachedSettle: CGFloat = detachedSettleOffset
+    ) -> PanelShellLayout {
+        shellLayout(
+            in: rect,
+            capWidth: capWidth,
+            capHeight: capHeight,
+            progress: ShellProgress(uniform: progress),
+            presentation: presentation,
+            detachedSettle: detachedSettle
+        )
+    }
+
+    /// Top-centre anchored scale plus a short downward settle, for displays
+    /// without a notch.
+    ///
+    /// This used to scale concentrically from 0.86, which moved the top edge
+    /// down and then back up — the panel floated instead of belonging to the
+    /// screen. Pinning the top edge and starting a touch above it inverts that:
+    /// the shell arrives from the top of the display, which is the same story
+    /// the notched version tells with real hardware.
+    ///
+    /// Uniform in both axes — there is no cap to bloom away from — so the height
+    /// channel drives it and the controller installs the same spring on both.
+    /// (Averaging the two channels would be nonlinear above `maxShellProgressX`,
+    /// where they clamp at different ceilings.)
     ///
     /// Linear in progress like the notch path, so the spring stays the only
     /// motion curve and its overshoot passes through without a kink. There is no
     /// cap: the caller pairs this with an opacity fade so the panel appears
     /// rather than unfurling from a housing that isn't there.
-    private static func detachedLayout(in rect: CGRect, progress: CGFloat) -> PanelShellLayout {
-        let p = min(max(progress, 0), maxShellProgress)
+    private static func detachedLayout(
+        in rect: CGRect,
+        progress: ShellProgress,
+        settle: CGFloat
+    ) -> PanelShellLayout {
+        let p = min(max(progress.y, 0), maxShellProgressY)
         let scale = detachedMinimumScale + (1 - detachedMinimumScale) * p
         let width = rect.width * scale
         let height = rect.height * scale
+        // Top edge fixed (modulo the settle), so the shell grows downward out of
+        // the screen's top edge instead of inflating around its own centre.
+        let top = rect.maxY + settle * (1 - p)
         let body = CGRect(
             x: rect.midX - width / 2,
-            y: rect.midY - height / 2,
+            y: top - height,
             width: width,
             height: height
         )
@@ -209,7 +320,7 @@ public enum PanelGeometry {
             shellRect: body,
             neckRadius: 0,
             bodyCornerRadius: min(24, width / 2, height / 2),
-            progress: p
+            progress: ShellProgress(uniform: p)
         )
     }
 

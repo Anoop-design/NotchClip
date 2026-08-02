@@ -1,27 +1,129 @@
 import AppKit
 import NotchClipCore
 
+/// Derives a channel's speed from the per-frame values AppKit writes while an
+/// animation is running.
+///
+/// Measured rather than assumed: driving a custom `@objc dynamic` NSView
+/// property through `animations` makes AppKit write the interpolated value via
+/// KVC every frame (~8.3 ms on a 120 Hz display), so consecutive `didSet` calls
+/// are a real sample stream. Frame timestamps jitter by a millisecond or so, and
+/// a single-frame difference inherits all of it, so the estimate is smoothed
+/// over a couple of frames.
+struct ProgressVelocitySampler {
+    /// Speed in progress-units per second.
+    private var estimate: CGFloat = 0
+    private var lastValue: CGFloat = 0
+    private var lastTime: CFTimeInterval = 0
+
+    /// Intervals outside this band are not animation frames: too short means two
+    /// writes in one frame, too long means the animation already ended and this
+    /// is a direct assignment, whose implied "velocity" is meaningless.
+    private static let minInterval: CFTimeInterval = 0.0005
+    private static let maxInterval: CFTimeInterval = 0.06
+    private static let smoothing: CGFloat = 0.5
+
+    mutating func record(_ value: CGFloat) {
+        let now = CACurrentMediaTime()
+        let dt = now - lastTime
+        if dt > Self.minInterval, dt < Self.maxInterval {
+            let sample = (value - lastValue) / CGFloat(dt)
+            estimate += (sample - estimate) * Self.smoothing
+        } else {
+            estimate = 0
+        }
+        lastValue = value
+        lastTime = now
+    }
+
+    mutating func reset(to value: CGFloat) {
+        estimate = 0
+        lastValue = value
+        lastTime = CACurrentMediaTime()
+    }
+
+    /// Zero once the samples are stale — a shell that stopped moving a while ago
+    /// is at rest, however fast it was travelling when it stopped.
+    func velocity() -> CGFloat {
+        (CACurrentMediaTime() - lastTime) > Self.maxInterval ? 0 : estimate
+    }
+}
+
 /// Solid-black island chrome whose mask grows down and out from the physical notch.
 final class NotchChromeView: NSView {
     var capWidth: CGFloat = PanelGeometry.compactDefaultWidth
     var capHeight: CGFloat = PanelGeometry.compactMinHeight
     var attachesToNotch = true
 
-    @objc dynamic var shellProgress: CGFloat = 0 {
+    /// Horizontal channel. Measured: AppKit drives a custom `@objc dynamic`
+    /// property through the `animations` dictionary by writing the interpolated
+    /// value via KVC once per frame, so `didSet` fires ~120×/s and is a valid
+    /// place to sample velocity from.
+    @objc dynamic var shellProgressX: CGFloat = 0 {
         didSet {
-            // Ceiling above 1 leaves room for the spring's overshoot.
-            shellProgress = min(max(shellProgress, 0), PanelGeometry.maxShellProgress)
+            shellProgressX = min(max(shellProgressX, 0), PanelGeometry.maxShellProgressX)
+            // Clamp first: velocity must describe what the eye sees, not the
+            // uncapped value the spring wanted.
+            widthSampler.record(shellProgressX)
             needsLayout = true
         }
     }
+
+    /// Vertical channel. Ceiling above 1 leaves room for the spring's overshoot.
+    @objc dynamic var shellProgressY: CGFloat = 0 {
+        didSet {
+            shellProgressY = min(max(shellProgressY, 0), PanelGeometry.maxShellProgressY)
+            heightSampler.record(shellProgressY)
+            needsLayout = true
+        }
+    }
+
+    /// Single-channel view of the shell, for callers with no interest in the
+    /// axis bloom (the capture pulse's lip, the onboarding preview). Animating
+    /// this through `animator()` works exactly as it did when it was stored:
+    /// AppKit interpolates it and writes through this setter each frame.
+    @objc dynamic var shellProgress: CGFloat {
+        get { shellProgressY }
+        set {
+            shellProgressX = newValue
+            shellProgressY = newValue
+        }
+    }
+
+    /// Current speed of each channel in progress-units per second, or 0 once the
+    /// samples are stale. Feeds `CASpringAnimation.initialVelocity` so a
+    /// transition interrupted mid-flight keeps its momentum instead of stopping
+    /// dead and reversing.
+    var widthVelocity: CGFloat { widthSampler.velocity() }
+    var heightVelocity: CGFloat { heightSampler.velocity() }
+
+    /// Set both channels without animating, discarding sampled velocity — the
+    /// shell teleported, it did not travel.
+    func setShellProgress(x: CGFloat, y: CGFloat) {
+        shellProgressX = x
+        shellProgressY = y
+        widthSampler.reset(to: shellProgressX)
+        heightSampler.reset(to: shellProgressY)
+    }
+
+    private var widthSampler = ProgressVelocitySampler()
+    private var heightSampler = ProgressVelocitySampler()
 
     /// Content that should track the *resting* shell rect, not the window
     /// bounds — the window is larger to give overshoot somewhere to go.
     weak var contentHost: NSView?
 
+    /// Transparent room this view's window reserves *above* the resting shell.
+    /// Only the detached presentation uses it (for the downward settle); the
+    /// capture pulse's window has none, so it leaves this at 0.
+    var detachedTopHeadroom: CGFloat = 0
+
     /// The resting shell rect within `bounds`, excluding overshoot headroom.
     var restingRect: CGRect {
-        PanelGeometry.restingRect(inWindowSized: bounds.size)
+        PanelGeometry.restingRect(
+            inWindowSized: bounds.size,
+            topHeadroom: attachesToNotch ? 0 : detachedTopHeadroom
+        )
     }
 
     var preferOpaque: Bool = false {
@@ -35,9 +137,11 @@ final class NotchChromeView: NSView {
     private let highlightLayer = CAShapeLayer()
 
     override class func defaultAnimation(forKey key: NSAnimatablePropertyKey) -> Any? {
-        if key == "shellProgress" {
-            // Fallback only. The controller installs a direction-specific
-            // CASpringAnimation via `animations` before each transition.
+        if key == "shellProgress" || key == "shellProgressX" || key == "shellProgressY" {
+            // Fallback only. The panel controller installs per-axis, per-
+            // direction CASpringAnimations via `animations` before each
+            // transition; the capture pulse and onboarding preview animate
+            // `shellProgress` with their own context timing and rely on this.
             return CABasicAnimation()
         }
         return super.defaultAnimation(forKey: key)
@@ -101,8 +205,11 @@ final class NotchChromeView: NSView {
             in: resting,
             capWidth: capWidth,
             capHeight: capHeight,
-            progress: shellProgress,
-            presentation: attachesToNotch ? .notch : .detached
+            progress: ShellProgress(x: shellProgressX, y: shellProgressY),
+            presentation: attachesToNotch ? .notch : .detached,
+            // The settle can only be as tall as the transparent room above the
+            // shell, or its first frames would be clipped at the window edge.
+            detachedSettle: min(PanelGeometry.detachedSettleOffset, detachedTopHeadroom)
         )
         let path = shellCGPath(layout: layout, attachesToNotch: attachesToNotch)
         let highlightPath = attachesToNotch
@@ -157,7 +264,7 @@ final class NotchChromeView: NSView {
             )
         }
 
-        guard layout.progress > 0.001, layout.bodyRect.height > 0.5 else {
+        guard layout.progress.y > 0.001, layout.bodyRect.height > 0.5 else {
             let radius = min(9, layout.capRect.height / 2)
             return CGPath(
                 roundedRect: layout.capRect,
@@ -216,7 +323,7 @@ final class NotchChromeView: NSView {
     /// cap itself is intentionally excluded so no bright outline appears around
     /// the physical notch.
     private func bodyHighlightCGPath(layout: PanelShellLayout) -> CGPath? {
-        guard layout.progress > 0.001, layout.bodyRect.height > 0.5 else { return nil }
+        guard layout.progress.y > 0.001, layout.bodyRect.height > 0.5 else { return nil }
 
         let body = layout.bodyRect
         let cap = layout.capRect
