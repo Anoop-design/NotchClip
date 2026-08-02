@@ -33,6 +33,21 @@ struct PanelRootView: View {
 
     private var motionReduced: Bool { reduceMotion || visualState.reduceMotion }
 
+    /// Depth of field the content resolves out of as it rides the shell open,
+    /// and softens back into on the way closed. Small: at 6 pt the text is
+    /// unreadable for the first frames and crisp well before the shell stops,
+    /// which reads as focusing rather than as an effect.
+    private static let maximumContentBlur: CGFloat = 6
+
+    /// Tied to the opacity so it needs no timer of its own — the same
+    /// `withAnimation` that fades the content drives it, in both directions.
+    /// Gated by the same accessibility settings that gate the geometry: a
+    /// reduced presentation gets the plain fade and nothing else.
+    private var contentBlurRadius: CGFloat {
+        guard !motionReduced, !visualState.reduceTransparency else { return 0 }
+        return Self.maximumContentBlur * CGFloat(1 - visualState.contentOpacity)
+    }
+
     /// ⇧⏎ pastes with formatting once the preference makes plain the default.
     private var alternatePasteTitle: String {
         history.preferences.alwaysPastePlainText ? "Paste with Formatting" : "Paste as Plain Text"
@@ -99,14 +114,14 @@ struct PanelRootView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         .background(Color.clear)
         .environment(\.colorScheme, .dark)
+        // Sharpens as it arrives, which is what lets the fade start while the
+        // shell is still small without the content reading as a pasted-on
+        // block. The scale and the rise that used to live here are gone: the
+        // content's motion is now a layer transform driven by the shell's own
+        // progress (see `NotchChromeView.applyContentTransform`), so repeating
+        // them here would apply the movement twice.
+        .blur(radius: contentBlurRadius)
         .opacity(visualState.contentOpacity)
-        // The content settles into place with the shell: a slight scale from
-        // the top plus a short rise, matching the island's inflate.
-        .scaleEffect(
-            motionReduced ? 1 : 0.97 + 0.03 * visualState.contentOpacity,
-            anchor: .top
-        )
-        .offset(y: motionReduced ? 0 : CGFloat(1 - visualState.contentOpacity) * -6)
         .accessibilityElement(children: .contain)
         .accessibilityLabel("NotchClip clipboard history")
         .onChange(of: visualState.focusRequestID) { _, _ in

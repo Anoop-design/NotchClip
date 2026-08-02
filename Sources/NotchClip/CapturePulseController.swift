@@ -181,7 +181,10 @@ final class CapturePulseController {
 
         let hosting = NSHostingView(rootView: PulseLabel(text: "", systemImage: "clipboard"))
         hosting.alphaValue = 0
-        chrome.addSubview(hosting)
+        // Masked, so the label is clipped by the lip's outline while it grows —
+        // deliberately not `contentHost`, which would also make it ride the
+        // shell's scale. The pulse's label just fades.
+        chrome.addMaskedSubview(hosting)
 
         self.window = panel
         self.chrome = chrome

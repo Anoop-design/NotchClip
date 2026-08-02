@@ -331,6 +331,141 @@ final class PanelGeometryTests: XCTestCase {
     /// rather than hanging off the top of it. Pinning the top and adding a short
     /// downward settle tells the same story the notched version tells with real
     /// hardware.
+    func testContentRidesTheNotchShellLinearlyFromTheTop() {
+        let rect = CGRect(x: 0, y: 0, width: 620, height: 420)
+        func content(_ p: CGFloat) -> ContentTransform {
+            PanelGeometry.contentTransform(
+                in: rect,
+                layout: PanelGeometry.shellLayout(
+                    in: rect,
+                    capWidth: 180,
+                    capHeight: 32,
+                    progress: ShellProgress(x: 1, y: p),
+                    presentation: .notch
+                ),
+                presentation: .notch
+            )
+        }
+
+        // Endpoints. Shallow enough to be felt rather than seen, and exactly
+        // identity at rest so the resting panel is never rasterized.
+        XCTAssertEqual(content(0).scale, PanelGeometry.contentMinimumScale, accuracy: 0.0001)
+        XCTAssertEqual(content(0).scale, 0.94, accuracy: 0.0001)
+        XCTAssertEqual(content(1).scale, 1, accuracy: 0.0001)
+        XCTAssertTrue(content(1).isEffectivelyIdentity)
+        XCTAssertFalse(content(0).isEffectivelyIdentity)
+
+        // The notch path never translates: the content hangs from the housing.
+        for p in stride(from: CGFloat(0), through: PanelGeometry.maxShellProgressY, by: 0.05) {
+            XCTAssertEqual(content(p).translationY, 0, accuracy: 0.0001)
+        }
+
+        // Linear in progress — the springs stay the only motion curves, and the
+        // overshoot region above 1 passes through at the same slope as below it
+        // instead of kinking where the eye is looking.
+        let step = content(0.5).scale - content(0.25).scale
+        XCTAssertEqual(content(0.75).scale - content(0.5).scale, step, accuracy: 0.0001)
+        XCTAssertEqual(content(1.05).scale - content(0.55).scale, step * 2, accuracy: 0.0001)
+
+        // Only the height channel drives it; the width bloom must not squeeze
+        // the text sideways.
+        let wide = PanelGeometry.contentTransform(
+            in: rect,
+            layout: PanelGeometry.shellLayout(
+                in: rect,
+                capWidth: 180,
+                capHeight: 32,
+                progress: ShellProgress(x: 0.2, y: 0.6),
+                presentation: .notch
+            ),
+            presentation: .notch
+        )
+        XCTAssertEqual(wide.scale, content(0.6).scale, accuracy: 0.0001)
+    }
+
+    func testContentOvershootStaysBelowTheTextSwellCeiling() {
+        let rect = CGRect(x: 0, y: 0, width: 620, height: 420)
+        let peak = PanelGeometry.contentTransform(
+            in: rect,
+            layout: PanelGeometry.shellLayout(
+                in: rect,
+                capWidth: 180,
+                capHeight: 32,
+                // Beyond the ceiling: shellLayout clamps to maxShellProgressY.
+                progress: ShellProgress(x: 1, y: 5),
+                presentation: .notch
+            ),
+            presentation: .notch
+        )
+        // The linear map carries the shell's overshoot into the content, but
+        // only a trace of it: 1.06 of shell is 1.0036 of content. The clamp is a
+        // guard rail that must not actually bind, or the content would stop
+        // tracking the shape at the top of the swell.
+        XCTAssertEqual(peak.scale, 1.0036, accuracy: 0.0002)
+        XCTAssertLessThan(peak.scale, PanelGeometry.contentMaximumScale)
+        XCTAssertGreaterThan(peak.scale, 1)
+    }
+
+    func testDetachedContentTracksTheShellRectInsteadOfScalingAgain() {
+        let rect = CGRect(x: 0, y: 0, width: 620, height: 420)
+        let settle = PanelGeometry.detachedSettleOffset
+        func detached(_ p: CGFloat) -> (PanelShellLayout, ContentTransform) {
+            let layout = PanelGeometry.shellLayout(
+                in: rect,
+                capWidth: 180,
+                capHeight: 32,
+                progress: p,
+                presentation: .detached
+            )
+            return (layout, PanelGeometry.contentTransform(
+                in: rect,
+                layout: layout,
+                presentation: .detached
+            ))
+        }
+
+        // The detached shell rect already scales, so the content must ride it
+        // exactly rather than adding a scale of its own — otherwise the content
+        // is compressed twice against a shell that moved once.
+        for p in stride(from: CGFloat(0), through: PanelGeometry.maxShellProgressY, by: 0.05) {
+            let (layout, transform) = detached(p)
+            XCTAssertEqual(
+                transform.scale,
+                layout.shellRect.height / rect.height,
+                accuracy: 0.0001
+            )
+            XCTAssertEqual(
+                transform.translationY,
+                layout.shellRect.maxY - rect.maxY,
+                accuracy: 0.0001
+            )
+        }
+
+        // At rest: identity, matching the notch path.
+        let (_, open) = detached(1)
+        XCTAssertTrue(open.isEffectivelyIdentity)
+
+        // Closed: the shell's own minimum scale, lifted by the full settle so
+        // the content hangs off the top edge with the shape.
+        let (_, closed) = detached(0)
+        XCTAssertEqual(closed.scale, PanelGeometry.detachedMinimumScale, accuracy: 0.0001)
+        XCTAssertEqual(closed.translationY, settle, accuracy: 0.0001)
+
+        // Degenerate rect must not divide by zero.
+        let empty = PanelGeometry.contentTransform(
+            in: CGRect(x: 0, y: 0, width: 620, height: 0),
+            layout: PanelGeometry.shellLayout(
+                in: CGRect(x: 0, y: 0, width: 620, height: 0),
+                capWidth: 180,
+                capHeight: 32,
+                progress: 0.5,
+                presentation: .detached
+            ),
+            presentation: .detached
+        )
+        XCTAssertEqual(empty, .identity)
+    }
+
     func testDetachedShellHangsFromTheTopEdgeAndSettlesDown() {
         let rect = CGRect(x: 0, y: 0, width: 620, height: 420)
         let settle = PanelGeometry.detachedSettleOffset

@@ -96,6 +96,35 @@ public struct PanelShellLayout: Equatable, Sendable {
     }
 }
 
+/// How the panel's content rides the shell.
+///
+/// The content used to sit still at full size while the mask grew over it — a
+/// window shade being raised, not an object opening. This is the transform that
+/// makes it part of the same motion, and it is derived from the shell's own
+/// progress rather than from a parallel timer, so the two can never drift apart
+/// (including through a mid-flight retarget, where a second animation would
+/// have to be interrupted and reseeded in lockstep).
+public struct ContentTransform: Equatable, Sendable {
+    /// Uniform scale, applied about the shell's top centre — the notch.
+    public var scale: CGFloat
+    /// Points to lift the content by after scaling; positive is up-screen. Only
+    /// the detached presentation uses it, to match the shell's downward settle.
+    public var translationY: CGFloat
+
+    public init(scale: CGFloat, translationY: CGFloat) {
+        self.scale = scale
+        self.translationY = translationY
+    }
+
+    public static let identity = ContentTransform(scale: 1, translationY: 0)
+
+    /// Close enough to identity that applying it would only cost a rasterization.
+    /// The thresholds are sub-pixel at any sane panel size.
+    public var isEffectivelyIdentity: Bool {
+        abs(scale - 1) < 0.0005 && abs(translationY) < 0.01
+    }
+}
+
 /// Compact / expanded frames for the retained notch panel (top-center anchored).
 public enum PanelGeometry {
     public static let compactDefaultWidth: CGFloat = 180
@@ -322,6 +351,57 @@ public enum PanelGeometry {
             bodyCornerRadius: min(24, width / 2, height / 2),
             progress: ShellProgress(uniform: p)
         )
+    }
+
+    /// Scale of the content at progress 0. Deliberately shallow: at 0.94 the
+    /// motion is felt rather than seen, and the text never travels far enough
+    /// for the rescale to read as a zoom. Smaller values (0.88 and below) turn
+    /// the open into a "window flying in" gesture, which is the opposite of the
+    /// island's "the housing opened" story.
+    public static let contentMinimumScale: CGFloat = 0.94
+    /// Ceiling on the content's share of the shell's overshoot. The linear map
+    /// below already keeps the natural peak tiny — at the height channel's
+    /// `maxShellProgressY` of 1.06 it reaches only 1.0036 — so this is a guard
+    /// rail that never binds in practice. Anything the eye can read as text
+    /// swelling was rejected.
+    public static let contentMaximumScale: CGFloat = 1.004
+
+    /// The transform that makes the content ride the shell, for either
+    /// presentation.
+    ///
+    /// One rule, stated two ways because the two presentations put the scale in
+    /// different places:
+    ///
+    /// - **Notched.** The shell's mask grows out of the cap while the shell
+    ///   *rect* stays put, so the content carries the scale itself: linear in
+    ///   the height channel from `contentMinimumScale` to 1, anchored at the top
+    ///   centre so the content hangs from the notch instead of inflating around
+    ///   its own middle.
+    /// - **Detached.** The shell rect is *already* scaling (top-anchored, 0.96 →
+    ///   1, plus a downward settle). Adding a second scale on top would compress
+    ///   the content twice, so here the content simply tracks the rect the shell
+    ///   actually occupies. At rest that is exactly identity, since the detached
+    ///   layout returns the full `rect` at progress 1.
+    ///
+    /// Linear in progress in both cases: the springs driving the progress
+    /// channels remain the only motion curves in the system.
+    public static func contentTransform(
+        in rect: CGRect,
+        layout: PanelShellLayout,
+        presentation: ShellPresentation = .notch
+    ) -> ContentTransform {
+        if presentation == .detached {
+            guard rect.height > 0.5 else { return .identity }
+            return ContentTransform(
+                scale: layout.shellRect.height / rect.height,
+                translationY: layout.shellRect.maxY - rect.maxY
+            )
+        }
+        let scale = min(
+            contentMinimumScale + (1 - contentMinimumScale) * layout.progress.y,
+            contentMaximumScale
+        )
+        return ContentTransform(scale: scale, translationY: 0)
     }
 
     /// Infer notch/cap width from public auxiliary top areas (menu-bar free regions).

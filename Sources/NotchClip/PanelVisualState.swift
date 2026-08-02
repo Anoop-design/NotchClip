@@ -8,10 +8,11 @@ import NotchClipCore
 final class PanelVisualState {
     /// 0 = compact shell, 1 = fully expanded shell.
     var shellProgress: CGFloat = 0
-    /// Content layer opacity (fades in after shell growth begins).
+    /// Content layer opacity, and — derived from it — the content's blur. The
+    /// content's scale is deliberately *not* here: it is a layer transform
+    /// driven straight off the shell's progress in `NotchChromeView`, which is
+    /// what keeps the content and the shape one motion rather than two.
     var contentOpacity: Double = 0
-    /// Subtle content scale; disabled under Reduce Motion.
-    var contentScale: CGFloat = 1
     /// Cap width used by the notch mask (compact top band).
     var capWidth: CGFloat = PanelGeometry.compactDefaultWidth
     var capHeight: CGFloat = PanelGeometry.compactMinHeight
@@ -28,18 +29,15 @@ final class PanelVisualState {
     func resetForCompact() {
         shellProgress = 0
         contentOpacity = 0
-        contentScale = 1
     }
 
     func applyExpandedAppearance() {
         shellProgress = 1
         contentOpacity = 1
-        contentScale = 1
     }
 
     func applyCollapsedAppearance() {
         contentOpacity = 0
-        contentScale = 1
         shellProgress = 0
     }
 }

@@ -83,11 +83,28 @@ private enum NotchShellTransition {
         }
     }
 
-    /// Settling time of the height axis. The content choreography is keyed to
-    /// this and not to the width, which is ~16 % shorter by construction.
+    /// Settling time of the height axis. The *open's* content choreography is
+    /// keyed to this and not to the width, which is ~16 % shorter by
+    /// construction.
     var heightSettlingDuration: TimeInterval {
         Self.spring(keyPath: "shellProgressY", spec: heightSpec, from: 0, to: 1, velocity: 0)
             .settlingDuration
+    }
+
+    var widthSettlingDuration: TimeInterval {
+        Self.spring(keyPath: "shellProgressX", spec: widthSpec, from: 0, to: 1, velocity: 0)
+            .settlingDuration
+    }
+
+    /// When the shell has finished moving on *both* axes — which is when the
+    /// animation group completes and the window is ordered out.
+    ///
+    /// The close's fade is keyed to this rather than to the height, because the
+    /// axes swap roles on the way in: the height leads the collapse (0.358 s)
+    /// and the width trails it (0.390 s), so a height-keyed fade would empty the
+    /// shell ~32 ms before it actually finished closing.
+    var shellSettlingDuration: TimeInterval {
+        max(widthSettlingDuration, heightSettlingDuration)
     }
 
     /// Settling time of the uniform (detached) spring.
@@ -201,6 +218,11 @@ final class NotchPanelController: NSObject, NSWindowDelegate {
 
     private var reduceMotion: Bool = false
     private var reduceTransparency: Bool = false
+    /// When the content's fade-in finishes on screen. `contentOpacity` cannot
+    /// answer that — `withAnimation` moves the model value to 1 the instant the
+    /// fade starts — and the collapse needs to know, because holding the
+    /// fade-out back is only right for content that is already fully up.
+    private var contentFadeInEnd: CFTimeInterval = 0
     /// Screen metrics frozen at presentation start so dismiss collapses on the same display.
     private var presentationMetrics: ScreenMetrics?
 
@@ -372,7 +394,6 @@ final class NotchPanelController: NSObject, NSWindowDelegate {
 
             if plan.allowsGeometryAnimation {
                 self.visualState.contentOpacity = 0
-                self.visualState.contentScale = 1
                 self.animate(
                     to: expanded,
                     shellProgress: 1,
@@ -393,24 +414,32 @@ final class NotchPanelController: NSObject, NSWindowDelegate {
                 // the text was still fading, which reads as two separate
                 // animations rather than one object opening.
                 //
-                // Starts once the shell has real area, and lands *before* the
-                // spring's final micro-settle so the content is already in place
-                // as the shape stops moving.
-                //
-                // Keyed to the height axis specifically: it is the longer of the
-                // two channels and the one the eye tracks, and every ratio below
-                // was calibrated against it. Keying off the width would shorten
-                // them all by ~16 % for no reason.
+                // Keyed to the height axis specifically: on the way open it is
+                // the longer of the two channels and the one the eye tracks, and
+                // every ratio below was calibrated against it. Keying off the
+                // width would shorten them all by ~16 % for no reason. (The
+                // collapse is the other way round, and keys off the slower axis
+                // explicitly — see `shellSettlingDuration`.)
                 let shellDuration = NotchShellTransition.expand.heightSettlingDuration
                 if !metrics.hasNotch {
                     // Fade completes early so the panel is solid while the
                     // spring is still settling — the scale carries the motion.
                     self.animatePanelAlpha(to: 1, duration: shellDuration * 0.45) {}
                 }
-                DispatchQueue.main.asyncAfter(deadline: .now() + shellDuration * 0.26) { [weak self] in
+                // The fade now starts while the shell is still small, where it
+                // used to wait for real area (0.26). It can: the content is
+                // carrying the shell's scale and blurring off, so there is no
+                // flat block to pop in — the motion is what hides the arrival,
+                // and holding the fade back only made the content look pasted on
+                // afterwards. It still lands (0.14 + 0.62 ≈ 0.76 of the settle)
+                // before the spring's final micro-settle, so the content is in
+                // place and sharp as the shape stops moving — and comfortably
+                // before the completion handler takes focus, so the search field
+                // is never keyed while still blurred.
+                DispatchQueue.main.asyncAfter(deadline: .now() + shellDuration * 0.14) { [weak self] in
                     guard let self else { return }
                     guard TransitionTokenPolicy.shouldApplyOpenCompletion(token: token, openGeneration: self.openGeneration) else { return }
-                    self.animateContentIn(duration: shellDuration * 0.52, plan: plan)
+                    self.animateContentIn(duration: shellDuration * 0.62, plan: plan)
                 }
             } else {
                 panel.setFrame(expanded, display: true)
@@ -464,12 +493,10 @@ final class NotchPanelController: NSObject, NSWindowDelegate {
         let metrics = presentationMetrics ?? currentScreenMetrics()
         let compact = PanelGeometry.compactFrame(on: metrics)
 
-        let contentFadeDuration = plan.allowsGeometryAnimation
-            ? min(0.14, plan.closeDuration * 0.68)
-            : plan.closeDuration
-        animateContentOut(duration: contentFadeDuration, plan: plan)
-
         if !plan.allowsGeometryAnimation {
+            // Reduce Motion: nothing moves, so the fade *is* the dismissal and
+            // has to run for its whole duration, starting now.
+            animateContentOut(duration: plan.closeDuration, plan: plan)
             animatePanelAlpha(to: 0, duration: plan.closeDuration) { [weak self] in
                 guard let self else { return }
                 guard TransitionTokenPolicy.shouldApplyCloseCompletion(
@@ -488,13 +515,41 @@ final class NotchPanelController: NSObject, NSWindowDelegate {
             return
         }
 
+        // Detached shells ride one uniform spring; notched ones finish when the
+        // slower of the two axes does, which is when the group completes and the
+        // window is ordered out.
+        let collapseDuration = metrics.hasNotch
+            ? NotchShellTransition.collapse.shellSettlingDuration
+            : NotchShellTransition.collapse.uniformSettlingDuration
+
         // Detached shells scale back down; without a matching fade they would
         // vanish abruptly at their smallest scale instead of dissolving.
         if !metrics.hasNotch {
-            // This branch is the detached one, where both channels ride the
-            // uniform spring — so that is the duration to pair the fade with.
-            let collapseDuration = NotchShellTransition.collapse.uniformSettlingDuration
             animatePanelAlpha(to: 0, duration: collapseDuration * 0.85) {}
+        }
+
+        // The content used to fade out in ≤ 0.14 s against a ~0.36 s collapse,
+        // so the back two thirds of every dismissal was an empty black slab
+        // shrinking into the notch. It now rides the shell down (that falls out
+        // of the progress-derived transform) and only gives up its opacity over
+        // roughly the last 40 %, landing just before the shell stops. Delayed,
+        // so it must carry the close token: a reopen part-way through the
+        // collapse bumps `closeGeneration` and this never fires, leaving the
+        // content visible for the reversal instead of blinking out behind it.
+        if CACurrentMediaTime() >= contentFadeInEnd {
+            DispatchQueue.main.asyncAfter(deadline: .now() + collapseDuration * 0.58) { [weak self] in
+                guard let self else { return }
+                guard TransitionTokenPolicy.shouldApplyCloseCompletion(
+                    token: closeToken,
+                    closeGeneration: self.closeGeneration
+                ) else { return }
+                self.animateContentOut(duration: collapseDuration * 0.38, plan: plan)
+            }
+        } else {
+            // Dismissed while the content was still fading *in*. Waiting would
+            // let it go on brightening all the way into the notch, which reads
+            // as the panel arguing with itself. Take it from wherever it is.
+            animateContentOut(duration: min(0.14, collapseDuration * 0.38), plan: plan)
         }
 
         self.animate(
@@ -636,7 +691,12 @@ final class NotchPanelController: NSObject, NSWindowDelegate {
         ]
         panel.isOpaque = false
         panel.backgroundColor = .clear
-        panel.hasShadow = true
+        // The chrome draws its own shadow, ramped with the shell's progress.
+        // AppKit's window shadow is derived from the window *shape* and is only
+        // recomputed on resize or `invalidateShadow()`; the shell transition
+        // animates a mask inside a fixed frame, so the window shadow would be
+        // frozen in the compact cap's outline for the whole presentation.
+        panel.hasShadow = false
         panel.titleVisibility = .hidden
         panel.titlebarAppearsTransparent = true
         panel.isMovableByWindowBackground = false
@@ -655,6 +715,9 @@ final class NotchPanelController: NSObject, NSWindowDelegate {
 
         let chrome = NotchChromeView(frame: .zero)
         chrome.autoresizingMask = [.width, .height]
+        // Depth ramps with the shell instead of arriving finished under it; see
+        // `panel.hasShadow` above for why AppKit's own shadow cannot do this.
+        chrome.drawsShadow = true
         // The panel's window reserves room above the resting shell on notch-less
         // displays, which is what the detached open's downward settle moves
         // through. `windowFrame` reserves the matching margin.
@@ -684,8 +747,7 @@ final class NotchPanelController: NSObject, NSWindowDelegate {
         )
         let hosting = NSHostingView(rootView: root)
         hosting.frame = chrome.restingRect
-        chrome.addSubview(hosting)
-        chrome.contentHost = hosting
+        chrome.setContentHost(hosting)
 
         panel.contentView = chrome
         self.panel = panel
@@ -806,23 +868,23 @@ final class NotchPanelController: NSObject, NSWindowDelegate {
         })
     }
 
+    /// Opacity only — and the blur derived from it. The content's *motion* is
+    /// not here: it comes off the shell's own progress in `NotchChromeView`, so
+    /// there is no second animation that could fall out of step with the spring.
+    ///
+    /// No ceiling on the duration: the caller derives it from the shell spring,
+    /// and clamping it here is what let the two drift apart.
     private func animateContentIn(duration: TimeInterval, plan: AnimationPlan) {
-        visualState.contentScale = 1
-        // No ceiling: the caller derives this from the shell spring, and
-        // clamping it here is what let the two drift out of step.
-        let animation: Animation = .easeOut(duration: duration)
-        withAnimation(animation) {
+        contentFadeInEnd = CACurrentMediaTime() + duration
+        withAnimation(.easeOut(duration: duration)) {
             visualState.contentOpacity = 1
-            visualState.contentScale = 1
             visualState.shellProgress = 1
         }
     }
 
     private func animateContentOut(duration: TimeInterval, plan: AnimationPlan) {
-        let animation: Animation = .easeOut(duration: duration)
-        withAnimation(animation) {
+        withAnimation(.easeOut(duration: duration)) {
             visualState.contentOpacity = 0
-            visualState.contentScale = 1
         }
     }
 
