@@ -13,11 +13,34 @@ enum AccessibilityAuthorization {
     /// by Accessibility *and* Core Graphics confirms event-post access. The two
     /// checks can briefly disagree while TCC is changing, so neither one is
     /// sufficient on its own.
+    ///
+    /// `CGPreflightPostEventAccess()` answers from a per-process cache that is
+    /// not invalidated when the user flips the switch in Privacy & Security, so
+    /// polling it alone reported "permission required" until NotchClip was
+    /// relaunched. When AX trust says the grant exists, refresh that cache
+    /// before believing the preflight's denial.
     static var isGranted: Bool {
-        isReadyForAutomaticPaste(
-            isAXTrusted: AXIsProcessTrusted(),
-            canPostEvents: CGPreflightPostEventAccess()
-        )
+        let isAXTrusted = AXIsProcessTrusted()
+        guard isAXTrusted else { return false }
+        if CGPreflightPostEventAccess() { return true }
+        return refreshPostEventAccess()
+    }
+
+    /// Last active event-post refresh, so a 500 ms poll cannot hammer CoreGraphics.
+    private static var lastPostEventRefresh: Date?
+    private static let postEventRefreshInterval: TimeInterval = 2
+
+    /// Re-asks CoreGraphics for event-post access to invalidate the stale
+    /// preflight cache. Callers must have already established AX trust, which
+    /// means the user allowed NotchClip — so this resolves silently rather than
+    /// presenting a prompt.
+    private static func refreshPostEventAccess(now: Date = Date()) -> Bool {
+        if let last = lastPostEventRefresh,
+           now.timeIntervalSince(last) < postEventRefreshInterval {
+            return false
+        }
+        lastPostEventRefresh = now
+        return CGRequestPostEventAccess()
     }
 
     static func isReadyForAutomaticPaste(

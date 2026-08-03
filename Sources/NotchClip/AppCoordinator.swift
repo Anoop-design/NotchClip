@@ -29,6 +29,7 @@ final class AppCoordinator: NSObject {
     private var didRestoreForPresentation: Bool = false
     private var permissionPasteErrorMessage: String?
     private var workspaceObserver: NSObjectProtocol?
+    private var accessibilityChangeObserver: NSObjectProtocol?
 
     var menuBarSymbol: String {
         storageError == nil ? "clipboard" : "exclamationmark.triangle"
@@ -98,6 +99,9 @@ final class AppCoordinator: NSObject {
         panelController?.shutdown()
         if let workspaceObserver {
             NSWorkspace.shared.notificationCenter.removeObserver(workspaceObserver)
+        }
+        if let accessibilityChangeObserver {
+            DistributedNotificationCenter.default().removeObserver(accessibilityChangeObserver)
         }
     }
 
@@ -263,6 +267,18 @@ final class AppCoordinator: NSObject {
         ) { [weak self] note in
             Task { @MainActor in
                 self?.handleActivation(note)
+            }
+        }
+        // The system broadcasts this the moment the Accessibility list changes,
+        // so the switch in Settings takes effect here without waiting for
+        // NotchClip to be activated or for a setup-window poll to come around.
+        accessibilityChangeObserver = DistributedNotificationCenter.default().addObserver(
+            forName: NSNotification.Name("com.apple.accessibility.api"),
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor in
+                self?.refreshAccessibilityStatus()
             }
         }
         rememberFrontmostIfNeeded()
