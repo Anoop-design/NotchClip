@@ -4,20 +4,20 @@ import XCTest
 
 @MainActor
 final class AccessibilityPermissionStateTests: XCTestCase {
-    func testAutomaticPasteRequiresBothAXTrustAndEventPostAccess() {
+    func testAutomaticPasteAcceptsEitherAccessibilityOrEventPostGrant() {
         XCTAssertFalse(
             AccessibilityAuthorization.isReadyForAutomaticPaste(
                 isAXTrusted: false,
                 canPostEvents: false
             )
         )
-        XCTAssertFalse(
+        XCTAssertTrue(
             AccessibilityAuthorization.isReadyForAutomaticPaste(
                 isAXTrusted: true,
                 canPostEvents: false
             )
         )
-        XCTAssertFalse(
+        XCTAssertTrue(
             AccessibilityAuthorization.isReadyForAutomaticPaste(
                 isAXTrusted: false,
                 canPostEvents: true

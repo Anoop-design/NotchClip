@@ -1,3 +1,4 @@
+import AppKit
 import XCTest
 @testable import NotchClipCore
 
@@ -143,6 +144,50 @@ final class PlainTextPastePolicyTests: XCTestCase {
         )
         XCTAssertFalse(PlainTextPastePolicy.outputTypeIdentifiers.contains(ClipboardTypeIdentifiers.rtf))
         XCTAssertFalse(PlainTextPastePolicy.outputTypeIdentifiers.contains(ClipboardTypeIdentifiers.html))
+    }
+
+    func testEnginePastePlainTextStripsFormattingOnARealPasteboard() throws {
+        let store = InMemoryPayloadStore()
+        let engine = ClipboardEngine(
+            repository: InMemoryClipboardRepository(),
+            payloadStore: store
+        )
+        let plain = Data("NOTCHCLIP PLAIN TEXT TEST".utf8)
+        let parsed = ParsedPasteboardItem(
+            representations: [
+                ParsedRepresentation(
+                    itemIndex: 0,
+                    typeIdentifier: ClipboardTypeIdentifiers.rtf,
+                    data: Data("{\\rtf1\\ansi\\b NOTCHCLIP PLAIN TEXT TEST}".utf8)
+                ),
+                ParsedRepresentation(
+                    itemIndex: 0,
+                    typeIdentifier: ClipboardTypeIdentifiers.utf8PlainText,
+                    data: plain
+                )
+            ],
+            primaryKind: .rtf,
+            previewText: "NOTCHCLIP PLAIN TEXT TEST",
+            searchText: "notchclip plain text test",
+            fingerprint: "plain-text-integration"
+        )
+        guard case .inserted(let entry) = engine.ingest(parsed: parsed) else {
+            return XCTFail("Expected the formatted test clip to be retained")
+        }
+
+        let pasteboard = NSPasteboard(
+            name: NSPasteboard.Name("com.anoop.notchclip.tests.plain.\(UUID().uuidString)")
+        )
+        pasteboard.clearContents()
+
+        XCTAssertEqual(try engine.pastePlainText(entry: entry, pasteboard: pasteboard), 1)
+        let item = try XCTUnwrap(pasteboard.pasteboardItems?.first)
+        XCTAssertEqual(
+            item.data(forType: NSPasteboard.PasteboardType(ClipboardTypeIdentifiers.utf8PlainText)),
+            plain
+        )
+        XCTAssertNil(item.data(forType: NSPasteboard.PasteboardType(ClipboardTypeIdentifiers.rtf)))
+        XCTAssertNil(item.data(forType: NSPasteboard.PasteboardType(ClipboardTypeIdentifiers.html)))
     }
 
     func testAlwaysPastePlainTextDefaultsOffAndPersists() {

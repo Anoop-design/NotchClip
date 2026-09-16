@@ -374,14 +374,14 @@ final class LinkPreviewServicePolicyTests: XCTestCase {
     }
 
     @MainActor
-    func testCacheHitAvoidsSecondFetch() async throws {
+    func testCacheHitWithArtworkAvoidsSecondFetch() async throws {
         let root = FileManager.default.temporaryDirectory
             .appendingPathComponent("lp-svc-\(UUID().uuidString)", isDirectory: true)
         defer { try? FileManager.default.removeItem(at: root) }
         let cache = try LinkPreviewCache(rootDirectory: root)
         let fake = FakeLinkFetcher()
         let url = URL(string: "https://example.com/y")!
-        fake.results[url] = LinkMetadataResult(title: "Y Title")
+        fake.results[url] = LinkMetadataResult(title: "Y Title", imagePNGData: Data([1, 2, 3]))
         let service = LinkPreviewService(cache: cache, fetcher: fake)
         let entry = ClipboardEntry(
             primaryKind: .url,
@@ -403,6 +403,43 @@ final class LinkPreviewServicePolicyTests: XCTestCase {
         }
         service2.requestVisible(entry: entry)
         await fulfillment(of: [exp2], timeout: 2)
+        XCTAssertEqual(fake.fetchCount[url] ?? 0, 1)
+    }
+
+    @MainActor
+    func testTitleOnlyCacheRefetchesForArtwork() async throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("lp-title-only-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let cache = try LinkPreviewCache(rootDirectory: root)
+        let url = URL(string: "https://example.com/video")!
+        try cache.store(
+            key: LinkPreviewURLPolicy.cacheKey(for: url),
+            url: url,
+            result: LinkMetadataResult(title: "Cached title")
+        )
+
+        let fake = FakeLinkFetcher()
+        fake.results[url] = LinkMetadataResult(
+            title: "Fresh title",
+            imagePNGData: Data([4, 5, 6])
+        )
+        let service = LinkPreviewService(cache: cache, fetcher: fake)
+        let entry = ClipboardEntry(
+            primaryKind: .url,
+            previewText: url.absoluteString,
+            searchText: url.absoluteString,
+            fingerprint: "title-only"
+        )
+        let exp = expectation(description: "artwork refetch")
+        service.onUpdate = { _, result in
+            XCTAssertEqual(result.title, "Fresh title")
+            XCTAssertEqual(result.imagePNGData, Data([4, 5, 6]))
+            exp.fulfill()
+        }
+
+        service.requestVisible(entry: entry, url: url)
+        await fulfillment(of: [exp], timeout: 2)
         XCTAssertEqual(fake.fetchCount[url] ?? 0, 1)
     }
 
@@ -554,12 +591,12 @@ final class RetainedWebURLTests: XCTestCase {
         }
     }
 
-    func testRetainedWebURLIgnoresNonURLPayloadFallback() throws {
+    func testRetainedWebURLAcceptsExactPlainTextURLRepresentation() throws {
         let engine = ClipboardEngine(
             repository: InMemoryClipboardRepository(),
             payloadStore: InMemoryPayloadStore()
         )
-        // Only plain text — must not fall back via loadPayloadData.
+        // “Copy Link” commands commonly vend only an exact plain-text URL.
         let reps = [
             ParsedRepresentation(
                 itemIndex: 0,
@@ -577,6 +614,9 @@ final class RetainedWebURLTests: XCTestCase {
         guard case .inserted(let entry) = engine.ingest(parsed: parsed) else {
             return XCTFail("insert")
         }
-        XCTAssertNil(engine.retainedWebURL(for: entry))
+        XCTAssertEqual(
+            engine.retainedWebURL(for: entry),
+            URL(string: "https://example.com/from-text")
+        )
     }
 }

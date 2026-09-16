@@ -515,7 +515,10 @@ public final class LinkPreviewService {
                 return
             }
 
-            if let cached {
+            // A title-only cache entry must not permanently suppress artwork.
+            // Publish complete cache hits immediately; otherwise refetch once
+            // per service lifetime so upgraded image extraction can fill it in.
+            if let cached, cached.imageData != nil {
                 let result = LinkMetadataResult(
                     title: cached.record.title,
                     imagePNGData: cached.imageData

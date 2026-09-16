@@ -57,6 +57,28 @@ final class CoreTests: XCTestCase {
         XCTAssertEqual(parser.classify(representations: reps), .url)
     }
 
+    func testClassifyExactPlainTextWebURLAsURL() {
+        let parser = PasteboardParser()
+        let reps = [
+            ParsedRepresentation(
+                typeIdentifier: ClipboardTypeIdentifiers.utf8PlainText,
+                data: Data("https://apps.apple.com/us/app/pages/id361309726".utf8)
+            )
+        ]
+        XCTAssertEqual(parser.classify(representations: reps), .url)
+    }
+
+    func testDoesNotClassifyProseContainingURLAsURL() {
+        let parser = PasteboardParser()
+        let reps = [
+            ParsedRepresentation(
+                typeIdentifier: ClipboardTypeIdentifiers.utf8PlainText,
+                data: Data("See https://apps.apple.com for details".utf8)
+            )
+        ]
+        XCTAssertEqual(parser.classify(representations: reps), .plainText)
+    }
+
     func testClassifyHTML() {
         let parser = PasteboardParser()
         let reps = [

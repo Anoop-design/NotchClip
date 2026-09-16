@@ -1,6 +1,8 @@
 # NotchClip
 
-Personal macOS clipboard history. Control–V (or any shortcut you record in Settings) morphs the MacBook notch into a translucent, Dynamic-Island-style panel holding your entire searchable history (macOS 14+).
+Personal macOS clipboard history. Control–V (or any shortcut you record in Settings) morphs the MacBook notch into a compact, Dynamic-Island-style panel holding your entire searchable history (macOS 14+).
+
+[Download the notarized macOS app](https://github.com/Anoop-design/NotchClip-Downloads/releases/latest) · [Release notes](https://github.com/Anoop-design/NotchClip-Downloads/releases/tag/v0.6.7)
 
 ## Requirements
 
@@ -14,7 +16,7 @@ Personal macOS clipboard history. Control–V (or any shortcut you record in Set
   export DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer
   ```
 
-  `scripts/build-app.sh` respects an existing `DEVELOPER_DIR`; otherwise it uses the active `xcrun` / Swift toolchain. No third-party dependencies; no network required to build.
+  `scripts/build-app.sh` respects an existing `DEVELOPER_DIR`; otherwise it uses the active `xcrun` / Swift toolchain. Sparkle 2 is resolved through Swift Package Manager; the first build requires network access.
 
 ## Build, test, bundle, verify
 
@@ -71,7 +73,7 @@ That pipeline signs the app with hardened runtime and a secure timestamp; submit
 
 Open the `.app` yourself from Finder. The local ad-hoc signature is sufficient for this locally built copy, but it is not suitable for distribution to other Macs.
 
-NotchClip has **one surface**. Control–V morphs the notch into a translucent panel
+NotchClip has **one surface**. Control–V morphs the notch into a compact panel
 containing the entire searchable history — there is no second window.
 
 | Action | Behavior |
@@ -80,9 +82,10 @@ containing the entire searchable history — there is no second window.
 | **Menu bar** | NotchClip menu: Show Clipboard, Pause/Resume, Settings, Quit |
 | **Search** | The search field holds focus for the whole presentation — just type to filter. Command–F returns focus to it. |
 | **List** | The complete history, sectioned into Pinned, Today, Yesterday, and Earlier. Up/Down move, Page Up/Down jump, Home/End go to the ends. |
-| **Preview** | The selected clip's **complete** contents, with real line breaks (monospaced for markup), plus its source, time, and retained size. |
-| **Filters** | Command–1 through Command–6 select All, Pinned, Text, Links, Images, or Files. Also available from the menu in the search header. |
+| **Preview** | The selected clip's contents (text previews display up to 100,000 characters), with real line breaks (monospaced for markup), plus its source, time, and retained size. |
+| **Filters** | Option–1 through Option–6 select All, Pinned, Text, Links, Images, or Files. Also available from the menu in the search header. |
 | **Paste** | Return writes the exact selected entry to the general pasteboard, closes the panel, restores the previous app, and sends Command–V (the first-run setup explains and requests Accessibility for automatic delivery). |
+| **Plain-text paste** | Shift–Return alternates between plain text and original formatting. Settings can make plain text the default. |
 | **Pin / delete** | Command–P pins, Command–Delete deletes, or use the row context menu. Pinning sorts an entry to the top and preserves it during “clear unpinned.” |
 | **Drag out** | Drag a row's artwork directly into pasteboard-aware destinations / input fields |
 | **Quick Look** | Command–Y previews supported images and files; Escape closes the preview. |
@@ -106,10 +109,10 @@ Captures accessible pasteboard flavors, including:
 - **History & payloads:** `~/Library/Application Support/NotchClip/`  
   - `metadata/` — entry metadata (atomic JSON repository)  
   - `payloads/` — retained pasteboard bytes only  
-- **History lifetime:** kept **indefinitely** until you clear unpinned items or clear all history in Settings. There is no automatic time-based purge of clipboard history.
+- **History retention:** keeps the latest **500 unpinned clips** by default. Choose a different limit or Unlimited in Settings. Pinned clips are exempt from the cap; there is no time-based purge.
 - **File copies:** original file URLs are **references**. NotchClip does **not** copy source files into storage. If a file is moved or deleted, drag-out / preview for that original path will not work (missing-file state is detected).
 - **Preferences:** local `UserDefaults` (e.g. link-preview fetch toggle).
-- **Launch at Login:** optional in Settings → General. NotchClip uses macOS Service Management to register the signed main app as a user-controlled login item.
+- **Launch at Login:** enabled by default when running from Applications; configurable in Settings → General. NotchClip uses macOS Service Management to register the signed main app as a user-controlled login item.
 
 ## Link previews (privacy)
 
@@ -153,4 +156,6 @@ The product and on-device intelligence decisions are recorded in [docs/DESIGN_AU
 
 ## License
 
-Private / unlicensed until specified.
+MIT © 2026 Anoop Chandrashekar. See [LICENSE](LICENSE).
+
+Sparkle and the website’s Inter font retain their respective third-party licenses.

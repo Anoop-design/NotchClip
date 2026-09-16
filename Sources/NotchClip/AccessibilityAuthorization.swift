@@ -9,58 +9,34 @@ import NotchClipCore
 /// control of the switch in Privacy & Security.
 @MainActor
 enum AccessibilityAuthorization {
-    /// Posting a synthetic Command-V is ready only when the process is trusted
-    /// by Accessibility *and* Core Graphics confirms event-post access. The two
-    /// checks can briefly disagree while TCC is changing, so neither one is
-    /// sufficient on its own.
+    /// macOS exposes full Accessibility trust and the narrower event-post grant
+    /// as separate TCC services, even though both appear under Accessibility in
+    /// System Settings. Either one authorizes the only privileged operation
+    /// NotchClip performs: synthesizing Command-V.
     ///
-    /// `CGPreflightPostEventAccess()` answers from a per-process cache that is
-    /// not invalidated when the user flips the switch in Privacy & Security, so
-    /// polling it alone reported "permission required" until NotchClip was
-    /// relaunched. When AX trust says the grant exists, refresh that cache
-    /// before believing the preflight's denial.
+    /// Requiring both caused a false negative after a valid grant whenever one
+    /// preflight cache lagged behind the other. Keep this check passive so the
+    /// onboarding poll never presents a second system prompt.
     static var isGranted: Bool {
-        let isAXTrusted = AXIsProcessTrusted()
-        guard isAXTrusted else { return false }
-        if CGPreflightPostEventAccess() { return true }
-        return refreshPostEventAccess()
-    }
-
-    /// Last active event-post refresh, so a 500 ms poll cannot hammer CoreGraphics.
-    private static var lastPostEventRefresh: Date?
-    private static let postEventRefreshInterval: TimeInterval = 2
-
-    /// Re-asks CoreGraphics for event-post access to invalidate the stale
-    /// preflight cache. Callers must have already established AX trust, which
-    /// means the user allowed NotchClip — so this resolves silently rather than
-    /// presenting a prompt.
-    private static func refreshPostEventAccess(now: Date = Date()) -> Bool {
-        if let last = lastPostEventRefresh,
-           now.timeIntervalSince(last) < postEventRefreshInterval {
-            return false
-        }
-        lastPostEventRefresh = now
-        return CGRequestPostEventAccess()
+        isReadyForAutomaticPaste(
+            isAXTrusted: AXIsProcessTrusted(),
+            canPostEvents: CGPreflightPostEventAccess()
+        )
     }
 
     static func isReadyForAutomaticPaste(
         isAXTrusted: Bool,
         canPostEvents: Bool
     ) -> Bool {
-        isAXTrusted && canPostEvents
+        isAXTrusted || canPostEvents
     }
 
     /// Readiness check for the explicit paste path only.
     ///
-    /// Unlike `isGranted` (safe to poll), this may perform a system event-post
-    /// request when AX trust exists but the CG preflight disagrees — a state TCC
-    /// can briefly enter after Settings changes. The request returns true
-    /// silently when the grant actually exists and false without UI when it was
-    /// denied, so a user who already decided is never re-prompted here.
+    /// This stays passive. Permission prompts belong to the explicit onboarding
+    /// action, never to a clip selection in another app.
     static func ensureReadyToPostEvents() -> Bool {
-        if isGranted { return true }
-        guard AXIsProcessTrusted() else { return false }
-        return CGRequestPostEventAccess()
+        isGranted
     }
 
     /// Requests the system-owned Accessibility prompt after a user action.

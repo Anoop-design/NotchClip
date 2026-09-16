@@ -65,6 +65,7 @@ final class AppCoordinator: NSObject {
     }
 
     func start() {
+        launchAtLogin.enableByDefaultIfNeeded()
         refreshAccessibilityStatus()
         bootstrapStorage()
         configureHotKey()

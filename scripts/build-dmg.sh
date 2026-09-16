@@ -162,16 +162,26 @@ on run argv
         set bounds of installerWindow to {120, 120, 800, 560}
         set iconOptions to icon view options of installerWindow
         set arrangement of iconOptions to not arranged
-        set icon size of iconOptions to 112
+        set icon size of iconOptions to 104
         set text size of iconOptions to 13
         set background picture of iconOptions to backgroundFile
-        set position of item "NotchClip.app" of mountedFolder to {170, 235}
-        set position of item "Applications" of mountedFolder to {510, 235}
+        set position of item "NotchClip.app" of mountedFolder to {170, 225}
+        set position of item "Applications" of mountedFolder to {510, 225}
         update mountedFolder without registering applications
-        delay 1
+        delay 2
+
+        -- Finder can create .DS_Store before it has flushed the icon-view
+        -- options. Reopen the window and leave it alive long enough for the
+        -- background alias, manual positions, and geometry to reach disk.
         try
             close installerWindow
         end try
+        delay 1
+        open mountedFolder
+        set installerWindow to container window of mountedFolder
+        set bounds of installerWindow to {120, 120, 800, 560}
+        update mountedFolder without registering applications
+        delay 4
     end tell
 end run
 APPLESCRIPT
@@ -183,6 +193,7 @@ if command -v xattr >/dev/null 2>&1; then
 fi
 codesign --verify --deep --strict --verbose=2 "${MOUNT_DIR}/NotchClip.app"
 sync
+sleep 2
 hdiutil detach "${DEVICE}" >/dev/null
 DEVICE=""
 

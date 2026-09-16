@@ -18,3 +18,11 @@ Profile.trace
 /dist/
 /packaging-scratch/
 .notchclip-install.*/
+/website/node_modules/
+/website/.wrangler/
+/website/.dev.vars
+/.wrangler/
+/tenicons-vercel-source/
+.env
+.env.*
+!.env.example

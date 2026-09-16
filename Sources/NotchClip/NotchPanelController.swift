@@ -380,7 +380,11 @@ final class NotchPanelController: NSObject, NSWindowDelegate {
         // the first frame. A detached shell has no anchor and must fade in, or
         // it reads as a rectangle popping into existence.
         let fadesIn = !plan.allowsGeometryAnimation || !metrics.hasNotch
-        panel.alphaValue = fadesIn ? 0 : 1
+        // A reversal must keep the current alpha, just as it keeps the shell's
+        // position and velocity. Resetting it makes detached panels flash out.
+        if !isReversingCollapse {
+            panel.alphaValue = fadesIn ? 0 : 1
+        }
         panel.orderFrontRegardless()
         NSApp.activate(ignoringOtherApps: true)
         panel.makeKeyAndOrderFront(nil)
@@ -393,7 +397,11 @@ final class NotchPanelController: NSObject, NSWindowDelegate {
             self.phase = .expanding
 
             if plan.allowsGeometryAnimation {
-                self.visualState.contentOpacity = 0
+                // Keep the in-flight SwiftUI opacity on reversal so the text
+                // retargets smoothly instead of disappearing for a fresh reveal.
+                if !isReversingCollapse {
+                    self.visualState.contentOpacity = 0
+                }
                 self.animate(
                     to: expanded,
                     shellProgress: 1,
@@ -436,7 +444,8 @@ final class NotchPanelController: NSObject, NSWindowDelegate {
                 // place and sharp as the shape stops moving — and comfortably
                 // before the completion handler takes focus, so the search field
                 // is never keyed while still blurred.
-                DispatchQueue.main.asyncAfter(deadline: .now() + shellDuration * 0.14) { [weak self] in
+                let contentDelay = isReversingCollapse ? 0 : shellDuration * 0.14
+                DispatchQueue.main.asyncAfter(deadline: .now() + contentDelay) { [weak self] in
                     guard let self else { return }
                     guard TransitionTokenPolicy.shouldApplyOpenCompletion(token: token, openGeneration: self.openGeneration) else { return }
                     self.animateContentIn(duration: shellDuration * 0.62, plan: plan)
@@ -1040,20 +1049,6 @@ final class NotchPanelController: NSObject, NSWindowDelegate {
     private func handleCommandKey(_ event: NSEvent) -> NSEvent? {
         let character = event.charactersIgnoringModifiers?.lowercased()
 
-        // ⌘1–⌘9 paste the Nth visible row outright. Plain digits still type into
-        // the search field, which holds focus for the whole presentation.
-        if let character, let ordinal = Int(character),
-           let entry = history.projection.entry(atOrdinal: ordinal) {
-            // Checked before moving the selection: a repeat while a paste is
-            // already running must not leave the highlight on a row it skipped.
-            guard !isDragging, activeSelectionOperation == nil, !history.isPasteInFlight else {
-                return nil
-            }
-            history.selectedID = entry.id
-            handleSelectionCopy()
-            return nil
-        }
-
         switch character {
         case "f":
             // Search lives here now; ⌘F just returns focus to the field.
@@ -1074,7 +1069,7 @@ final class NotchPanelController: NSObject, NSWindowDelegate {
         }
     }
 
-    /// ⌥1–⌥6 select a content filter; ⌘1–⌘9 now paste by row position.
+    /// ⌥1–⌥6 select a content filter.
     private func handleOptionKey(_ event: NSEvent) -> NSEvent? {
         // Option remaps typed characters (⌥1 → "¡"), so read the un-modified key.
         guard let digit = Int(event.charactersIgnoringModifiers ?? ""),

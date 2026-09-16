@@ -70,6 +70,12 @@ hang back, so re-seed before a release rather than mid-release.
      --keychain-profile AC_NOTARY
    ```
 
+   The script waits up to 24 hours for each Apple submission. Override that
+   only when needed, for example `NOTARY_TIMEOUT=2h scripts/release-notarized.sh …`.
+   If Apple has accepted an upload but the wait fails or times out, the script
+   prints and preserves its release workspace and submission IDs so the exact
+   signed artifact remains available for recovery and stapling.
+
    Sparkle's framework and its nested helpers (`Installer.xpc`,
    `Downloader.xpc`, `Autoupdate`, `Updater.app`) are signed inside-out by
    `scripts/build-app.sh` before the outer app signature, with the hardened

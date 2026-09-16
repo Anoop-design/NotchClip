@@ -720,38 +720,42 @@ public final class ClipboardEngine: @unchecked Sendable {
         return nil
     }
 
-    /// Exact retained `public.url` → canonical http/https URL for link previews.
+    /// Exact retained URL representation → canonical http/https URL for link previews.
     ///
-    /// Loads **only** the `public.url` payload (no arbitrary type fallback). Decodes original
-    /// URL data / UTF-8 bytes without case changes or truncation, then validates/canonicalizes
-    /// via `LinkPreviewURLPolicy`. Background-safe (no main-thread or pasteboard access).
+    /// Prefers `public.url`, then permits exact plain-text URL representations for sources whose
+    /// “Copy Link” command does not vend `public.url`. It never scans prose or arbitrary payloads.
+    /// Background-safe (no main-thread or pasteboard access).
     public func retainedWebURL(for entry: ClipboardEntry) -> URL? {
-        guard let ref = entry.payloadRefs.first(where: {
-            $0.typeIdentifier == ClipboardTypeIdentifiers.url && !$0.relativePath.isEmpty
-        }) else {
-            return nil
-        }
-        let data: Data
-        do {
-            data = try payloadStore.loadData(for: ref)
-        } catch {
-            return nil
-        }
-        guard !data.isEmpty else { return nil }
+        guard entry.primaryKind == .url else { return nil }
+        let permittedTypes = [
+            ClipboardTypeIdentifiers.url,
+            ClipboardTypeIdentifiers.plainText,
+            ClipboardTypeIdentifiers.utf8PlainText,
+            ClipboardTypeIdentifiers.utf16External
+        ]
+        for type in permittedTypes {
+            guard let ref = entry.payloadRefs.first(where: {
+                $0.typeIdentifier == type && !$0.relativePath.isEmpty
+            }), let data = try? payloadStore.loadData(for: ref), !data.isEmpty else {
+                continue
+            }
 
-        // Prefer full original string bytes (no truncation / case fold here).
-        if let raw = String(data: data, encoding: .utf8)
-            ?? String(data: data, encoding: .utf16) {
-            let cleaned = raw
-                .trimmingCharacters(in: CharacterSet(charactersIn: "\0"))
-                .trimmingCharacters(in: .whitespacesAndNewlines)
-            if let url = LinkPreviewURLPolicy.canonicalHTTPURL(from: cleaned) {
+            // Prefer full original string bytes (no truncation / case fold here).
+            if let raw = String(data: data, encoding: .utf8)
+                ?? String(data: data, encoding: .utf16) {
+                let cleaned = raw
+                    .trimmingCharacters(in: CharacterSet(charactersIn: "\0"))
+                    .trimmingCharacters(in: .whitespacesAndNewlines)
+                if let url = LinkPreviewURLPolicy.canonicalHTTPURL(from: cleaned) {
+                    return url
+                }
+            }
+            // Binary NSURL absolute-URL data representation applies to public.url only.
+            if type == ClipboardTypeIdentifiers.url,
+               let nsURL = NSURL(absoluteURLWithDataRepresentation: data, relativeTo: nil) as URL?,
+               let url = LinkPreviewURLPolicy.canonicalHTTPURL(from: nsURL.absoluteString) {
                 return url
             }
-        }
-        // Binary NSURL absolute-URL data representation.
-        if let nsURL = NSURL(absoluteURLWithDataRepresentation: data, relativeTo: nil) as URL? {
-            return LinkPreviewURLPolicy.canonicalHTTPURL(from: nsURL.absoluteString)
         }
         return nil
     }

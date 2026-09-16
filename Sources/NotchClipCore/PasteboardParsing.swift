@@ -161,6 +161,12 @@ public struct PasteboardParser: Sendable {
         let hasText = ids.contains(ClipboardTypeIdentifiers.plainText)
             || ids.contains(ClipboardTypeIdentifiers.utf8PlainText)
             || ids.contains(ClipboardTypeIdentifiers.utf16External)
+        let hasExactTextURL = !hasURL && hasText && !hasHTML && !hasRTF
+            && string(from: representations, types: [
+                ClipboardTypeIdentifiers.plainText,
+                ClipboardTypeIdentifiers.utf8PlainText,
+                ClipboardTypeIdentifiers.utf16External
+            ]).flatMap(LinkPreviewURLPolicy.canonicalHTTPURL(from:)) != nil
 
         var hits = 0
         if hasFiles { hits += 1 }
@@ -172,6 +178,7 @@ public struct PasteboardParser: Sendable {
         if hasFiles { return .fileList }
         if hasImage { return .image }
         if hasURL && !hasText && !hasHTML && !hasRTF { return .url }
+        if hasExactTextURL { return .url }
         if hasHTML { return .html }
         if hasRTF { return .rtf }
         if hasURL { return .url }

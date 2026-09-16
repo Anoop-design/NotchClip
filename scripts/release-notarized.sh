@@ -8,6 +8,9 @@ IDENTITY=""
 KEYCHAIN_PROFILE=""
 OUTPUT_DMG=""
 WORK_DIR=""
+NOTARY_TIMEOUT="${NOTARY_TIMEOUT:-24h}"
+PRESERVE_WORK_DIR=0
+RELEASE_SUCCEEDED=0
 
 usage() {
   cat <<'EOF'
@@ -89,6 +92,17 @@ APP_ZIP="${WORK_DIR}/NotchClip.zip"
 DMG_PATH="${WORK_DIR}/NotchClip-${VERSION}-${ARCH}.dmg"
 
 cleanup() {
+  if [[ "${PRESERVE_WORK_DIR}" -eq 1 && "${RELEASE_SUCCEEDED}" -ne 1 ]]; then
+    echo "Release workspace preserved for notarization recovery:" >&2
+    echo "  ${WORK_DIR}" >&2
+    echo "Submission IDs:" >&2
+    if [[ -s "${WORK_DIR}/notary-submissions.txt" ]]; then
+      sed 's/^/  /' "${WORK_DIR}/notary-submissions.txt" >&2
+    else
+      echo "  (no submission ID was recorded)" >&2
+    fi
+    return
+  fi
   case "${WORK_DIR}" in
     "${TMPDIR:-/tmp}"/notchclip-release.*|/tmp/notchclip-release.*|/private/tmp/notchclip-release.*)
       [[ -d "${WORK_DIR}" ]] && rm -rf "${WORK_DIR}"
@@ -100,38 +114,78 @@ trap cleanup EXIT
 notarize() {
   local artifact="$1"
   local label="$2"
+  local submit_json="${WORK_DIR}/${label}-notary-submit.json"
   local result_json="${WORK_DIR}/${label}-notary-result.json"
   local log_json="${WORK_DIR}/${label}-notary-log.json"
+  local history_json="${WORK_DIR}/${label}-notary-history.json"
+  local upload_artifact="${WORK_DIR}/notary-upload-${label}-$(basename "${artifact}")"
+  local attempt=1
+  local max_attempts=3
+  local submission_id=""
 
   echo "Submitting ${label} for notarization…"
-  if ! xcrun notarytool submit "${artifact}" \
-    --keychain-profile "${KEYCHAIN_PROFILE}" \
-    --wait \
-    --timeout 30m \
-    --output-format json > "${result_json}"; then
-    local failed_id
-    failed_id="$(plutil -extract id raw -o - "${result_json}" 2>/dev/null || true)"
-    if [[ -n "${failed_id}" ]]; then
-      xcrun notarytool log "${failed_id}" \
+  # notarytool has been observed to leave the file it is reading with an invalid
+  # outer DMG signature when its connection is interrupted. Always upload a
+  # disposable copy so the signed deliverable remains immutable and verifiable.
+  cp -X "${artifact}" "${upload_artifact}"
+  while ! xcrun notarytool submit "${upload_artifact}" \
+      --keychain-profile "${KEYCHAIN_PROFILE}" \
+      --no-progress \
+      --output-format json > "${submit_json}"; do
+    # notarytool can time out after the upload was accepted but before it
+    # returns the submission ID. Recover that ID instead of uploading again.
+    if xcrun notarytool history \
         --keychain-profile "${KEYCHAIN_PROFILE}" \
-        "${log_json}" >/dev/null 2>&1 || true
-      echo "Notarization log: ${log_json}" >&2
+        --output-format json > "${history_json}"; then
+      local newest_name
+      newest_name="$(plutil -extract history.0.name raw -o - "${history_json}" 2>/dev/null || true)"
+      if [[ "${newest_name}" == "$(basename "${upload_artifact}")" ]]; then
+        submission_id="$(plutil -extract history.0.id raw -o - "${history_json}" 2>/dev/null || true)"
+      fi
     fi
-    echo "error: notarization submission failed for ${label}" >&2
+    if [[ -n "${submission_id}" ]]; then
+      echo "Recovered Apple submission ID after connection timeout: ${submission_id}" >&2
+      break
+    fi
+    if [[ "${attempt}" -ge "${max_attempts}" ]]; then
+      echo "error: notarization submission failed for ${label} after ${max_attempts} attempts" >&2
+      exit 1
+    fi
+    attempt=$((attempt + 1))
+    echo "Notarization connection failed; retrying ${label} (${attempt}/${max_attempts})…" >&2
+    sleep 3
+  done
+
+  if [[ -z "${submission_id}" ]]; then
+    submission_id="$(plutil -extract id raw -o - "${submit_json}" 2>/dev/null || true)"
+  fi
+  if [[ -z "${submission_id}" ]]; then
+    echo "error: Apple did not return a submission ID for ${label}" >&2
+    exit 1
+  fi
+  echo "Apple notarization submission ID for ${label}: ${submission_id}"
+  printf '%s=%s\n' "${label}" "${submission_id}" >> "${WORK_DIR}/notary-submissions.txt"
+  PRESERVE_WORK_DIR=1
+
+  if ! xcrun notarytool wait "${submission_id}" \
+      --keychain-profile "${KEYCHAIN_PROFILE}" \
+      --timeout "${NOTARY_TIMEOUT}" \
+      --output-format json > "${result_json}"; then
+    xcrun notarytool log "${submission_id}" \
+      --keychain-profile "${KEYCHAIN_PROFILE}" \
+      "${log_json}" >/dev/null 2>&1 || true
+    echo "Notarization log: ${log_json}" >&2
+    echo "error: notarization wait failed for ${label} (${submission_id})" >&2
     exit 1
   fi
 
   local status
   status="$(plutil -extract status raw -o - "${result_json}" 2>/dev/null || true)"
   if [[ "${status}" != "Accepted" ]]; then
-    local submission_id
-    submission_id="$(plutil -extract id raw -o - "${result_json}" 2>/dev/null || true)"
-    if [[ -n "${submission_id}" ]]; then
-      xcrun notarytool log "${submission_id}" \
-        --keychain-profile "${KEYCHAIN_PROFILE}" \
-        "${log_json}" >/dev/null 2>&1 || true
-      echo "Notarization log: ${log_json}" >&2
-    fi
+    xcrun notarytool log "${submission_id}" \
+      --keychain-profile "${KEYCHAIN_PROFILE}" \
+      "${log_json}" >/dev/null 2>&1 || true
+    echo "Notarization log: ${log_json}" >&2
     echo "error: Apple notarization status for ${label}: ${status:-unknown}" >&2
     exit 1
   fi
@@ -170,6 +224,7 @@ spctl -a -vv -t open --context context:primary-signature "${DMG_PATH}"
 
 mkdir -p "$(dirname "${OUTPUT_DMG}")"
 mv "${DMG_PATH}" "${OUTPUT_DMG}"
+RELEASE_SUCCEEDED=1
 
 echo "Release accepted, stapled, and Gatekeeper validated:"
 echo "  ${OUTPUT_DMG}"

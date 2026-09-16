@@ -183,6 +183,7 @@ fi
 
 "${SWIFT[@]}" build \
   --package-path "${REPO_ROOT}" \
+  --disable-automatic-resolution \
   --configuration "${CONFIGURATION}" \
   --product NotchClip \
   --scratch-path "${BUILD_DIR}"
@@ -190,6 +191,7 @@ fi
 BIN=""
 if SHOW_BIN="$("${SWIFT[@]}" build \
   --package-path "${REPO_ROOT}" \
+  --disable-automatic-resolution \
   --configuration "${CONFIGURATION}" \
   --product NotchClip \
   --scratch-path "${BUILD_DIR}" \

@@ -1,6 +1,7 @@
 import Foundation
 import AppKit
 import LinkPresentation
+import UniformTypeIdentifiers
 import NotchClipCore
 
 /// Live LPMetadataProvider-backed fetcher. Cancellation calls `provider.cancel()`.
@@ -8,33 +9,101 @@ final class LPMetadataFetcher: LinkMetadataFetching, @unchecked Sendable {
     func fetch(url: URL) async throws -> LinkMetadataResult {
         let provider = LPMetadataProvider()
         provider.timeout = 12
-        provider.shouldFetchSubresources = false
+        // Artwork and video thumbnails are subresources. Disabling this still
+        // returns titles for many pages, but commonly leaves imageProvider nil.
+        provider.shouldFetchSubresources = true
         return try await withTaskCancellationHandler {
             let metadata = try await provider.startFetchingMetadata(for: url)
             try Task.checkCancellation()
             let title = LinkPreviewURLPolicy.trimmedTitle(metadata.title)
-            var imageData: Data?
-            if let imageProvider = metadata.imageProvider {
-                imageData = try await loadImageData(from: imageProvider)
-            }
+            let imageData = try await loadBestVisual(
+                imageProvider: metadata.imageProvider,
+                iconProvider: metadata.iconProvider
+            )
             return LinkMetadataResult(title: title, imagePNGData: imageData)
         } onCancel: {
             provider.cancel()
         }
     }
 
+    /// App Store pages commonly expose the app artwork as an icon rather than
+    /// as the page's primary image. Try both, keeping the richer page image when
+    /// available and falling back cleanly if a provider cannot vend an NSImage.
+    private func loadBestVisual(
+        imageProvider: NSItemProvider?,
+        iconProvider: NSItemProvider?
+    ) async throws -> Data? {
+        for provider in [imageProvider, iconProvider].compactMap({ $0 }) {
+            do {
+                if let data = try await loadImageData(from: provider) {
+                    return data
+                }
+            } catch is CancellationError {
+                throw CancellationError()
+            } catch {
+                continue
+            }
+            try Task.checkCancellation()
+        }
+        return nil
+    }
+
     private func loadImageData(from provider: NSItemProvider) async throws -> Data? {
-        try await withCheckedThrowingContinuation { cont in
+        if provider.canLoadObject(ofClass: NSImage.self) {
+            do {
+                if let image = try await loadNSImage(from: provider) {
+                    return LinkPreviewImageCodec.boundedPNG(from: image)
+                }
+            } catch is CancellationError {
+                throw CancellationError()
+            } catch {
+                // Some LinkPresentation providers advertise NSImage but only
+                // successfully vend a registered image data representation.
+            }
+        }
+
+        for identifier in provider.registeredTypeIdentifiers where
+            UTType(identifier)?.conforms(to: .image) == true {
+            do {
+                guard let bytes = try await loadDataRepresentation(
+                    from: provider,
+                    typeIdentifier: identifier
+                ), let image = NSImage(data: bytes) else { continue }
+                if let png = LinkPreviewImageCodec.boundedPNG(from: image) {
+                    return png
+                }
+            } catch is CancellationError {
+                throw CancellationError()
+            } catch {
+                continue
+            }
+        }
+        return nil
+    }
+
+    private func loadNSImage(from provider: NSItemProvider) async throws -> NSImage? {
+        try await withCheckedThrowingContinuation { continuation in
             provider.loadObject(ofClass: NSImage.self) { object, error in
                 if let error {
-                    cont.resume(throwing: error)
+                    continuation.resume(throwing: error)
                     return
                 }
-                guard let image = object as? NSImage else {
-                    cont.resume(returning: nil)
+                continuation.resume(returning: object as? NSImage)
+            }
+        }
+    }
+
+    private func loadDataRepresentation(
+        from provider: NSItemProvider,
+        typeIdentifier: String
+    ) async throws -> Data? {
+        try await withCheckedThrowingContinuation { continuation in
+            provider.loadDataRepresentation(forTypeIdentifier: typeIdentifier) { data, error in
+                if let error {
+                    continuation.resume(throwing: error)
                     return
                 }
-                cont.resume(returning: LinkPreviewImageCodec.boundedPNG(from: image))
+                continuation.resume(returning: data)
             }
         }
     }

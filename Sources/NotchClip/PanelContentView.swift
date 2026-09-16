@@ -85,7 +85,6 @@ struct PanelRootView: View {
                 canPaste: selectedEntry != nil,
                 selectedIsPinned: selectedEntry?.isPinned ?? false,
                 alternatePasteTitle: alternatePasteTitle,
-                scope: $history.scope,
                 onDismissError: history.clearCaptureError,
                 onPaste: onSelect,
                 onPasteAlternate: onSelectAlternate,
@@ -683,10 +682,21 @@ private struct ClipPreviewPane: View {
             if let image = preview?.thumbnail, entry.primaryKind == .url {
                 Image(nsImage: image)
                     .resizable()
-                    .scaledToFill()
-                    .frame(maxWidth: .infinity, maxHeight: 130)
+                    .scaledToFit()
+                    .frame(maxWidth: .infinity, maxHeight: 140)
+                    .frame(maxWidth: .infinity, alignment: .center)
+                    .background(NotchClipDesign.surfaceStrong)
                     .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
                     .accessibilityLabel("Link preview image")
+            }
+            if entry.primaryKind == .url,
+               let title = preview?.linkTitle,
+               !title.isEmpty {
+                Text(title)
+                    .font(.system(size: 15, weight: .semibold))
+                    .foregroundStyle(NotchClipDesign.primaryText)
+                    .lineLimit(2)
+                    .accessibilityLabel("Link title: \(title)")
             }
             // The complete retained text, with real line breaks. `previewText`
             // is collapsed and capped at 200 characters, so it is only a
@@ -782,7 +792,6 @@ private struct PanelFooter: View {
     let canPaste: Bool
     var selectedIsPinned: Bool = false
     var alternatePasteTitle: String = "Paste as Plain Text"
-    @Binding var scope: ClipScope
     let onDismissError: () -> Void
     let onPaste: () -> Void
     var onPasteAlternate: () -> Void = {}
@@ -821,10 +830,6 @@ private struct PanelFooter: View {
 
             PanelHint(key: "↑↓", label: "Move")
             PanelHint(key: "↵", label: "Paste")
-            // Per-row ⌘N badges meant tracking ⌘ and re-rendering the whole list
-            // on every modifier press; one quiet footer hint teaches the same thing.
-            PanelHint(key: "⇧↵", label: "Plain")
-            PanelHint(key: "⌘1–9", label: "Row")
             actionsMenu
         }
         .padding(.horizontal, PanelLayout.footerPadding)
@@ -848,18 +853,6 @@ private struct PanelFooter: View {
             .disabled(!canPaste)
             Button("Copy to Clipboard", systemImage: "doc.on.doc", action: onCopy)
                 .disabled(!canPaste)
-
-            Divider()
-
-            // The old "⌥1–6 Filter" keycap lived here; the filter is now a
-            // submenu so the footer teaches the shortcuts in context.
-            Picker("Filter", selection: $scope) {
-                ForEach(ClipScope.allCases) { option in
-                    Label(option.title, systemImage: option.systemImage)
-                        .tag(option)
-                }
-            }
-            .pickerStyle(.menu)
 
             Divider()
 
@@ -890,8 +883,7 @@ private struct PanelFooter: View {
         .menuIndicator(.hidden)
         .fixedSize()
         .accessibilityLabel("Actions for the selected clip")
-        .help("Paste, pin, copy, filter, or delete")
-        .accessibilityHint("Press Command-1 through Command-9 to paste a visible row by its position")
+        .help("Paste options, pin, copy, or delete")
     }
 
     private var countLabel: String {
