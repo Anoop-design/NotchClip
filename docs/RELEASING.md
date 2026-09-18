@@ -96,13 +96,20 @@ hang back, so re-seed before a release rather than mid-release.
    `SUFeedURL`, `SUPublicEDKey`, and `SUEnableAutomaticChecks` are present. A
    build that ships without them can never be fixed in place.
 
-4. **Collect the release DMGs in one directory and generate the appcast.**
+4. **Generate the signed appcast for the published release.**
 
-   Keep older DMGs in the same directory — `generate_appcast` re-emits an entry
-   for each one and can build binary deltas between them.
+   Put the new notarized DMG in a directory dedicated to that version. Publish
+   the DMG as a GitHub Release asset first, then generate the feed with that
+   release's exact download prefix. For 0.6.7:
 
    ```sh
-   scripts/make-appcast.sh --releases dist/releases
+   mkdir -p dist/releases/0.6.7
+   cp dist/NotchClip-0.6.7-arm64.dmg dist/releases/0.6.7/
+   scripts/make-appcast.sh \
+     --releases dist/releases/0.6.7 \
+     --output docs/appcast.xml \
+     --download-url-prefix https://github.com/Anoop-design/NotchClip/releases/download/v0.6.7/ \
+     --link https://github.com/Anoop-design/NotchClip/releases/tag/v0.6.7
    ```
 
    The script refuses to run if the Keychain key does not match the
@@ -114,7 +121,7 @@ hang back, so re-seed before a release rather than mid-release.
    second Mac), pass the exported key instead:
    `scripts/make-appcast.sh --releases dist/releases --ed-key-file <path>`.
 
-5. **Publish `appcast.xml` and every DMG it references.**
+5. **Publish `docs/appcast.xml` through GitHub Pages.**
 
    The feed URL baked into the app is:
 
@@ -122,12 +129,19 @@ hang back, so re-seed before a release rather than mid-release.
    https://anoop-design.github.io/NotchClip/appcast.xml
    ```
 
-   so `appcast.xml` must be served from the `NotchClip` GitHub Pages site, and
-   each DMG must be reachable at
-   `https://anoop-design.github.io/NotchClip/<dmg-filename>` — the default
-   `--download-url-prefix`. If you host the DMGs somewhere else (GitHub
-   Releases assets, for example), pass the matching `--download-url-prefix` to
-   `make-appcast.sh`, or the feed will advertise downloads that 404.
+   GitHub Pages publishes the `/docs` directory on `main`. Commit and push
+   `docs/appcast.xml`, then wait for the Pages build to finish. Keep
+   `docs/.nojekyll` so the XML is served without Jekyll processing.
+
+   The DMG remains a GitHub Release asset; Pages hosts only the feed. Update
+   both version references in the command above for each release. Do not mix
+   DMGs from different release tags under one download prefix. The feed can
+   advertise only the newest full installer; Sparkle does not require every
+   historical release to be listed.
+
+   Verify the live feed returns HTTP 200, advertises the intended build number,
+   and contains a valid EdDSA enclosure signature. Download its enclosure and
+   check its size, signature, and SHA-256 against the notarized artifact.
 
    **The repository must be public** (or the assets otherwise publicly hosted)
    for GitHub Pages to serve the feed. Sparkle sends no credentials.

@@ -1,0 +1,16 @@
+<?xml version="1.0" standalone="yes"?>
+<rss xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle" version="2.0">
+    <channel>
+        <title>NotchClip</title>
+        <item>
+            <title>0.6.7</title>
+            <pubDate>Fri, 18 Sep 2026 07:53:33 +0530</pubDate>
+            <link>https://github.com/Anoop-design/NotchClip/releases/tag/v0.6.7</link>
+            <sparkle:version>18</sparkle:version>
+            <sparkle:shortVersionString>0.6.7</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
+            <sparkle:hardwareRequirements>arm64</sparkle:hardwareRequirements>
+            <enclosure url="https://github.com/Anoop-design/NotchClip/releases/download/v0.6.7/NotchClip-0.6.7-arm64.dmg" length="2284252" type="application/octet-stream" sparkle:edSignature="nhKlX0wP8h3tth8B8YxQx2t70KrtROquaxYdT9pu9i8o5oSpX2qwl5XbQ6Lp0ywf0R+aCNYsQQdxenKUlb6IAQ=="/>
+        </item>
+    </channel>
+</rss>
